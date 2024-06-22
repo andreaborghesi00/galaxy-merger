@@ -1,0 +1,5 @@
+*.ipynb
+**/datasets/*
+**/__pycache__/*
+**/Imaging Science/*
+*:Zone.Identifier
