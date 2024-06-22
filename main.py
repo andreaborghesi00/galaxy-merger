@@ -13,27 +13,7 @@
 # ---
 
 # %% [markdown]
-# AUTHOR: MATTEO FOSSATI
-#
-# NOTEBOOK FOR CLASSIFYING galaxy mergers with galaxy images in various bands and using CNNs
-#
-# You will see an exercise of building, compiling, and training a CNN on syntetic astronomical imaging data.
-#
-# Load the data and visualize a sample of the data.
-#
-# 1) Divide the data into training, validation, and testing sets.
-#
-# 2) Build a CNN in Keras.
-#
-# 3) Compile the CNN.
-#
-# 4) Train the CNN to perform a classification task.
-#
-# 5) Evaluate the results.
-#
-# CNNs can be applied to a wide range of image recognition tasks, including classification and regression. In this notebook, we will build, compile, and train CNN to classify whether a galaxy has undergone a merger, using simulated Hubble and James Webb Space Telescopes images of galaxies.
-#
-#
+# # Imports and initialization
 
 # %%
 # arrays and math
@@ -42,6 +22,8 @@ from scipy import fftpack
 
 # data handling
 import pickle
+import os
+import albumentations as albus
 
 # fits
 from astropy.io import fits
@@ -52,20 +34,37 @@ from astropy.visualization import simple_norm
 # plotting
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
-
+from tqdm import tqdm
 
 # keras
 from keras.models import Model
 from keras.layers import Input, Flatten, Dense, Activation, Dropout, BatchNormalization
-from keras.layers import Conv2D, MaxPooling2D, UpSampling2D, concatenate, Input, Conv2DTranspose, Dropout
+from keras.layers import Conv2D, MaxPooling2D, UpSampling2D, concatenate, Input, Conv2DTranspose, Dropout, GlobalAveragePooling2D, AveragePooling2D, Flatten
 from keras.callbacks import EarlyStopping
 from keras.callbacks import Callback, ModelCheckpoint
+from keras.optimizers import Adam
+from AugmentationCallback import AugmentationCallback
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import EfficientNetB0
+from tensorflow.keras import models
 
+# torch
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.nn import Conv2d, MaxPool2d, ConvTranspose2d, BatchNorm2d, Dropout2d, ReLU, Sigmoid, GELU, Module, Sequential, Linear
+from torch.utils.data import DataLoader, Dataset
+from torch.optim import Adam, AdamW
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, CosineAnnealingLR, ReduceLROnPlateau
+import torchmetrics as tm
+from torchsummary import summary
 
 # sklearn (for machine learning)
 from sklearn.model_selection import train_test_split
 from sklearn import metrics
 import tensorflow as tf
+
 
 # denoise
 import gmmDenoise
@@ -73,19 +72,21 @@ import morphologicalDenoise
 import fourierDenoise
 import unetDenoise
 
+
 # load data
 y = np.load('datasets/labels.npy')
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # %%
 X = np.load('datasets/dataset.npy')
 
 # %%
-gpu_devices = tf.config.experimental.list_physical_devices('GPU')
-for device in gpu_devices:
-    tf.config.experimental.set_memory_growth(device, True)
+# gpu_devices = tf.config.experimental.list_physical_devices('GPU')
+# for device in gpu_devices:
+#     tf.config.experimental.set_memory_growth(device, True)
 
 # %% [markdown]
-# # Data retrieval
+# ## Data retrieval
 
 # %%
 # %%time
@@ -382,10 +383,86 @@ model = unetDenoise.load_model('unet_precomputed/unet_model_4epochs.keras', inpu
 X_unet = unetDenoise.predict(model, X)
 
 # %%
-plot_orig_samples(x=X_unet, y=y, num_samples=1)
+plot_orig_samples(x=X_unet, y=y, num_samples=5)
 
 # %% [markdown]
 # Next, reshape the image array as follows: (number_of_images, image_width, image_length, 3). This is a “channels last” approach, where the final axis denotes the number of “spectral bands”. CNN’s will work with an arbitrary number of channels.
+
+# %% [markdown]
+# # Pytorch dataset and loaders
+
+# %%
+# Choose dataset
+experiment_name = "heavy_augmented"
+random_state = 42
+X = np.load('datasets/dataset.npy')
+X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.2, random_state=random_state)
+X_test, X_val, y_test, y_val = train_test_split(X_valtest, y_valtest, test_size=0.5, random_state=random_state)
+
+
+# %%
+class GalaxyDataset(Dataset):
+    def __init__(self, X, y, transform=None):
+        self.X = X
+        self.y = y
+        self.transform = transform
+        # channel last to channel first
+        self.X = np.moveaxis(self.X, -1, 1)
+        self.y = np.expand_dims(self.y, axis=1)
+        # x to tensor
+        self.X = torch.tensor(self.X, dtype=torch.float32)
+        self.y = torch.tensor(self.y, dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, idx):
+        if self.transform is not None:
+            return self.transform(self.X[idx]), self.y[idx]
+        return self.X[idx], self.y[idx]
+
+
+# %%
+augmentations = albus.Compose([
+    albus.HorizontalFlip(p=0.5),
+    albus.VerticalFlip(p=0.5),
+    albus.RandomRotate90,
+    albus.RandomBrightnessContrast(p=0.2),
+    albus.RandomGamma(p=0.2),
+])
+
+# %%
+train_ds = GalaxyDataset(X_train, y_train, transform=augmentations)
+val_ds = GalaxyDataset(X_val, y_val)
+test_ds = GalaxyDataset(X_test, y_test)
+
+# %%
+train_ds.__getitem__(0)[1].shape
+
+# %%
+batch_size = 256
+
+train_dl = DataLoader(
+    train_ds,
+    batch_size=batch_size,
+    shuffle=True,
+    num_workers=4
+)
+
+val_dl = DataLoader(
+    val_ds,
+    batch_size=batch_size,
+    shuffle=False,
+    num_workers=4
+)
+
+test_dl = DataLoader(
+    test_ds,
+    batch_size=batch_size,
+    shuffle=False,
+    num_workers=4
+)
+
 
 # %% [markdown]
 # # Models
@@ -398,6 +475,186 @@ plot_orig_samples(x=X_unet, y=y, num_samples=1)
 # Further details about the sigmoid and softmax activation function can be found in the Keras Activation Function Documentation. https://keras.io/api/layers/activations/
 
 # %%
+class HeavyCNN(nn.Module):
+    def __init__(self):
+        super(HeavyCNN, self).__init__()
+        self.conv1 = nn.Sequential(
+            Conv2d(3, 32, kernel_size=6, padding='same'),
+            BatchNorm2d(32),
+            GELU(),
+            Conv2d(32, 32, kernel_size=6, padding='same'),
+            BatchNorm2d(32),
+            GELU(),
+            MaxPool2d(2)
+        )
+
+        self.conv2 = nn.Sequential(
+            Conv2d(32, 64, kernel_size=5, padding='same'),
+            BatchNorm2d(64),
+            GELU(),
+            Conv2d(64, 64, kernel_size=5, padding='same'),
+            BatchNorm2d(64),
+            GELU(),
+            MaxPool2d(2)
+        )
+        
+        self.conv3 = nn.Sequential(
+            Conv2d(64, 128, kernel_size=3, padding='same'),
+            BatchNorm2d(128),
+            GELU(),
+            Conv2d(128, 128, kernel_size=3, padding='same'),
+            BatchNorm2d(128),
+            GELU(),
+            Conv2d(128, 128, kernel_size=3, padding='same'),
+            BatchNorm2d(128),
+            GELU(),
+            MaxPool2d(2)
+        )
+
+        self.conv4 = nn.Sequential(
+            Conv2d(128, 256, kernel_size=3, padding='same'),
+            BatchNorm2d(256),
+            GELU(),
+            Conv2d(256, 256, kernel_size=3, padding='same'),
+            BatchNorm2d(256),
+            GELU(),
+            Conv2d(256, 256, kernel_size=3, padding='same'),
+            BatchNorm2d(256),
+            GELU(),
+            MaxPool2d(2)
+        )
+
+        self.fc1 = nn.Sequential(
+            Linear(256*4*4, 1024),
+            GELU(),
+            Dropout2d(0.5),
+            Linear(1024, 512),
+            GELU(),
+            Dropout2d(0.5),
+            Linear(512, 1),
+            Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
+        x = x.view(-1, 256*4*4)
+        x = self.fc1(x)
+        return x
+
+
+
+# %%
+def validate(model, dl):
+    model.eval()
+    val_acc = tm.Accuracy(task='binary', average='macro').to(device)
+    val_bce = nn.BCELoss()
+    val_loss_hist = []
+
+    for x, y in dl:
+        x = x.to(device)
+        y = y.to(device)
+
+        with torch.no_grad():
+            out = model(x)
+            val_acc.update(out, y)
+            val_loss = val_bce(out, y)
+            val_loss_hist.append(val_loss.item())
+
+    return val_acc.compute().item(), np.mean(val_loss_hist)
+
+
+# %%
+def train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion):
+    pbar = tqdm(total=epochs*len(train_dl))
+    model.train()
+    train_acc = tm.Accuracy(task='binary', average='macro').to(device)
+    last_val_acc = -1
+
+    val_acc_hist = []
+    train_acc_hist = []
+
+    val_loss_hist = []
+    train_loss_hist = []
+    train_acc 
+    for epoch in range(epochs):
+        local_train_acc_hist = []
+        local_train_loss_hist = []
+        for x, y in train_dl:
+            x = x.to(device)
+            y = y.to(device)
+
+            optimizer.zero_grad()
+            out = model(x)
+            loss = criterion(out, y)
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            train_acc.update(out, y)
+            local_train_acc_hist.append(train_acc.compute().item())
+            local_train_loss_hist.append(loss.item())
+            pbar.set_description(f'Epoch {epoch+1}/{epochs}, Loss: {loss.item():.4f}, Accuracy: {local_train_acc_hist[-1]:.4f}, val_acc (previous): {last_val_acc:.4f}')
+            pbar.update(1)
+        train_acc_hist.append(np.mean(local_train_acc_hist))
+
+        last_val_acc, last_val_loss = validate(model, val_dl)
+        val_acc_hist.append(last_val_acc)
+        val_loss_hist.append(last_val_loss)
+    return train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist
+
+
+
+# %%
+model = HeavyCNN().to(device)
+criterion = nn.BCELoss()
+optimizer = AdamW(model.parameters(), lr=1e-4)
+scheduler = CosineAnnealingLR(optimizer, T_max=15, eta_min=1e-6)
+epochs = 30
+
+
+# %%
+summary(model, (3, 72, 72));
+
+# %%
+train_loss, val_loss, train_acc, val_acc = train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion)
+
+history = {
+    'train_loss': train_loss,
+    'val_loss': val_loss,
+    'train_acc': train_acc,
+    'val_acc': val_acc
+}
+
+i = 0
+while os.path.exists(f'history_{experiment_name}_{i}.pkl'):
+    i += 1
+pickle.dump(history, open(f'history_{experiment_name}_{i}.pkl', 'wb'))
+
+# %%
+# pretty plots
+plt.figure(figsize=(12, 6))
+plt.subplot(1, 2, 1)
+plt.plot(train_loss, label='train')
+plt.plot(val_loss, label='val')
+plt.title('Loss')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(train_acc, label='train')
+plt.plot(val_acc, label='val')
+plt.title('Accuracy')
+plt.legend()
+plt.show()
+
+# %%
+validate(model, test_dl)
+
+# %% [markdown]
+# # Tensorflow stuff
+
+# %%
 from keras.optimizers import SGD
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.optimizers import Adam, AdamW
@@ -408,6 +665,7 @@ def heavy_cnn(initial_input_shape):
     
     model = Sequential()
     model.add(Conv2D(32, kernel_size=(6, 6), activation='gelu', input_shape=initial_input_shape, padding='same'))
+    model.add(BatchNormalization())
     model.add(Conv2D(32, kernel_size=(6, 6), activation='gelu', input_shape=initial_input_shape, padding='same'))
     model.add(BatchNormalization())
     # model.add(Dropout(.2))
@@ -415,6 +673,7 @@ def heavy_cnn(initial_input_shape):
     
     
     model.add(Conv2D(64, kernel_size=(5, 5), activation='gelu', padding='same'))
+    model.add(BatchNormalization())
     model.add(Conv2D(64, kernel_size=(5, 5), activation='gelu', padding='same'))
     model.add(BatchNormalization())
     # model.add(Dropout(.2))
@@ -429,6 +688,7 @@ def heavy_cnn(initial_input_shape):
     model.add(MaxPooling2D(pool_size=(2, 2)))
     
     model.add(Conv2D(256, kernel_size=(3, 3), activation='gelu', padding='same'))
+    model.add(BatchNormalization())
     model.add(Conv2D(256, kernel_size=(3, 3), activation='gelu', padding='same'))
     model.add(BatchNormalization())
     # model.add(Dropout(.2))
@@ -443,7 +703,7 @@ def heavy_cnn(initial_input_shape):
     model.add(Dense(1, activation='sigmoid'))
     
     # opt = SGD(learning_rate=0.01, momentum=0.9)
-    opt = AdamW(learning_rate=0.0001)
+    opt = AdamW(learning_rate=0.00005)
     
     model.compile(loss='binary_crossentropy', optimizer=opt, metrics=['accuracy'])
     model.summary()
@@ -451,6 +711,108 @@ def heavy_cnn(initial_input_shape):
     return model
     
     
+
+# %%
+def create_galaxy_merger_model(input_shape=(72, 72, 3), trainable_base=False):
+    # Load the pretrained EfficientNetB0 model
+    base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=input_shape)
+    
+    # Freeze the base model if trainable_base is False
+    base_model.trainable = trainable_base
+    
+    # Create the new model
+    model = models.Sequential([
+        base_model,
+        GlobalAveragePooling2D(),
+        Dense(1024, activation='gelu'),
+        Dropout(0.5),
+        Dense(1, activation='sigmoid')
+    ])
+    
+    # Compile the model
+    model.compile(
+        optimizer=tf.keras.optimizers.AdamW(learning_rate=1e-4),
+        loss='binary_crossentropy',
+        metrics=['accuracy']
+    )
+    model.summary()
+    return model
+
+def preprocess_image(image):
+    # image = tf.image.resize(image, (224, 224))
+    image = tf.keras.applications.efficientnet.preprocess_input(image)
+    return image
+
+
+
+# %%
+import timm
+from huggingface_hub import login
+
+login("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")
+
+
+# %%
+encoder = timm.create_model('hf_hub:mwalmsley/zoobot-encoder-convnext_nano', pretrained=True, num_classes=0)
+
+# %%
+import tensorflow as tf
+import torch
+import timm
+
+class TFZoobotEncoder(tf.keras.Model):
+    def __init__(self, pytorch_model):
+        super(TFZoobotEncoder, self).__init__()
+        self.pytorch_model = pytorch_model
+        
+    @tf.function
+    def call(self, inputs):
+        # Convert TensorFlow tensor to PyTorch tensor
+        x = tf.transpose(inputs, [0, 3, 1, 2])  # NHWC to NCHW
+        x = tf.cast(x, tf.float32)
+        
+        # Run inference
+        features = tf.py_function(self._run_pytorch_model, [x], tf.float32)
+        
+        # Ensure the output shape is set
+        features.set_shape([None, 768, None, None])  # Adjust the 768 if your model outputs a different number of channels
+        return features
+    
+    def _run_pytorch_model(self, x):
+        x_torch = torch.from_numpy(x.numpy())
+        with torch.no_grad():
+            features = self.pytorch_model(x_torch)
+        return features.numpy()
+
+# Load the PyTorch model
+encoder_pt = timm.create_model('hf_hub:mwalmsley/zoobot-encoder-convnext_nano', pretrained=True, num_classes=0)
+encoder_pt.eval()
+
+# Create TensorFlow wrapper
+encoder_tf = TFZoobotEncoder(encoder_pt)
+
+# Create the full model
+def create_galaxy_merger_model(encoder, num_classes=2):
+    inputs = tf.keras.Input(shape=(72, 72, 3))
+    x = encoder(inputs)
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    x = tf.keras.layers.Dense(512, activation='relu')(x)
+    x = tf.keras.layers.Dropout(0.3)(x)
+    outputs = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
+    
+    model = tf.keras.Model(inputs=inputs, outputs=outputs)
+    return model
+
+model = create_galaxy_merger_model(encoder_tf)
+
+# Compile the model
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
 
 # %%
 # #Place your CNN here
@@ -501,47 +863,86 @@ def deep_merge(initial_input_shape):
 # You can learn more about optimizers and more about loss functions for regression tasks in the Keras documentation.
 
 # %% [markdown]
-# # Training
+# ## Training
 
 # %%
-# Choose dataset
-#
-random_state = 42
-X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.8, random_state=random_state)
-X_test, X_val, y_test, y_val = train_test_split(X_valtest, y_valtest, test_size=0.5, random_state=random_state)
+import functools
 
 # %%
-from keras.optimizers import Adam
-from AugmentationCallback import AugmentationCallback
+# data augmentation
+datagen = ImageDataGenerator(
+    rotation_range=20,  # Random rotation between 0 and 20 degrees
+    width_shift_range=0.2,  # Random horizontal shift
+    height_shift_range=0.2,  # Random vertical shift
+    horizontal_flip=True,  # Random horizontal flip
+    zoom_range=0.2,  # Random zoom
+    shear_range=0.2,  # Random shear
+    fill_mode='nearest',  # Strategy for filling in newly created pixels
+)
 
-nb_epoch = 800
-batch_size = 128
+# X_train = map(preprocess_image, X_train)
+# X_train = np.array(list(X_train))
+
+# X_val = map(preprocess_image, X_val)
+# X_val = np.array(list(X_val))
+# Assume x_train is your training data (shape: (num_samples, height, width, channels))
+# and y_train is your labels
+
+# Fit the ImageDataGenerator to your data
+datagen.fit(X_train)
+
+# %%
+nb_epoch = 40
 shuffle = True
 
-stop_early = EarlyStopping(monitor='val_loss', patience=40, restore_best_weights=True)
-augmentation_cb = AugmentationCallback()
+# stop_early = EarlyStopping(monitor='val_loss', patience=8, restore_best_weights=True)
+augmented_data_generator = datagen.flow(X_train, y_train, batch_size=batch_size)
 model = heavy_cnn(X_train.shape[1:])
 
+# model = create_galaxy_merger_model(X_train.shape[1:], trainable_base=True)
+
+
+# %%
+X.shape
 
 # %%
 with tf.device('/GPU:0'):
-    history = model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=nb_epoch, batch_size=batch_size, shuffle=shuffle)
+    history = model.fit(augmented_data_generator, validation_data=(X_val, y_val), epochs=nb_epoch, batch_size=batch_size, shuffle=shuffle)
 
 # %% [markdown]
 # To visualize the performance of the CNN, we plot the evolution of the accuracy and loss as a function of training epochs, for the training set and for the validation set.
 
 # %% [markdown]
-# # Testing and result analysis
+# ## Testing and result analysis
 
 # %%
 # Plot (accuracy, val accuracy, loss and val loss) vs epoch
 
-plt.plot(history.history['accuracy'])
-plt.plot(history.history['val_accuracy'])
-plt.plot(history.history['loss'])
-plt.plot(history.history['val_loss'])
-plt.title('model accuracy and loss')
-plt.ylabel('loss/accuracy')
+pickle.dump(history.history, open(f'results/history_{experiment_name}.pkl', 'wb'))
+
+plt.title('model loss')
+plt.plot(history.history['accuracy'], label='train')
+plt.plot(history.history['val_accuracy'], label='val')
+plt.show()
+plt.title('model accuracy')
+plt.plot(history.history['loss'], label='train')
+plt.plot(history.history['val_loss'], label='val')
+# plt.ylabel('loss/accuracy')
+plt.xlabel('epoch')
+plt.legend(['train_acc', 'val_acc', 'train_loss', 'val_loss'], loc='upper left')
+plt.show()
+
+# %%
+load_hist = pickle.load(open(f'results/history_{experiment_name}.pkl', 'rb'))
+
+plt.title('model loss')
+plt.plot(load_hist['accuracy'], label='train')
+plt.plot(load_hist['val_accuracy'], label='val')
+plt.show()
+
+plt.title('model accuracy')
+plt.plot(load_hist['loss'], label='train')
+plt.plot(load_hist['val_loss'], label='val')
 plt.xlabel('epoch')
 plt.legend(['train_acc', 'val_acc', 'train_loss', 'val_loss'], loc='upper left')
 plt.show()
