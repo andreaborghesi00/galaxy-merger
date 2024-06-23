@@ -24,6 +24,7 @@ from scipy import fftpack
 import pickle
 import os
 import albumentations as albus
+from albumentations.pytorch import ToTensorV2
 
 # fits
 from astropy.io import fits
@@ -64,7 +65,6 @@ from torchsummary import summary
 from sklearn.model_selection import train_test_split
 from sklearn import metrics
 import tensorflow as tf
-
 
 # denoise
 import gmmDenoise
@@ -393,32 +393,36 @@ plot_orig_samples(x=X_unet, y=y, num_samples=5)
 
 # %%
 # Choose dataset
-experiment_name = "heavy_augmented"
+experiment_name = "gmm_heavy"
 random_state = 42
 X = np.load('datasets/dataset.npy')
+X = gmmDenoise.background_subtraction_dataset(X)
 X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.2, random_state=random_state)
 X_test, X_val, y_test, y_val = train_test_split(X_valtest, y_valtest, test_size=0.5, random_state=random_state)
+X_train[0].shape
 
 
 # %%
 class GalaxyDataset(Dataset):
     def __init__(self, X, y, transform=None):
-        self.X = X
-        self.y = y
+        self.X = np.array(X)
+        self.y = np.array(y)
         self.transform = transform
         # channel last to channel first
-        self.X = np.moveaxis(self.X, -1, 1)
+        if transform is None:
+            print('Transforming images')
+            self.X = np.moveaxis(self.X, -1, 1)
         self.y = np.expand_dims(self.y, axis=1)
         # x to tensor
-        self.X = torch.tensor(self.X, dtype=torch.float32)
-        self.y = torch.tensor(self.y, dtype=torch.float32)
+        # self.X = torch.tensor(self.X, dtype=torch.float32)
+        # self.y = torch.tensor(self.y, dtype=torch.float32)
 
     def __len__(self):
         return len(self.X)
 
     def __getitem__(self, idx):
         if self.transform is not None:
-            return self.transform(self.X[idx]), self.y[idx]
+            return self.transform(image=self.X[idx])['image'], self.y[idx]
         return self.X[idx], self.y[idx]
 
 
@@ -426,18 +430,18 @@ class GalaxyDataset(Dataset):
 augmentations = albus.Compose([
     albus.HorizontalFlip(p=0.5),
     albus.VerticalFlip(p=0.5),
-    albus.RandomRotate90,
-    albus.RandomBrightnessContrast(p=0.2),
-    albus.RandomGamma(p=0.2),
+    albus.RandomRotate90(p=0.5),
+    # albus.RandomBrightnessContrast(p=0.5), # they're already pretty noisy, so perhaps dont
+    ToTensorV2()
 ])
 
 # %%
-train_ds = GalaxyDataset(X_train, y_train, transform=augmentations)
+train_ds = GalaxyDataset(X_train, y_train)
 val_ds = GalaxyDataset(X_val, y_val)
 test_ds = GalaxyDataset(X_test, y_test)
 
 # %%
-train_ds.__getitem__(0)[1].shape
+train_ds.__getitem__(0)[0].shape
 
 # %%
 batch_size = 256
@@ -549,7 +553,7 @@ class HeavyCNN(nn.Module):
 # %%
 def validate(model, dl):
     model.eval()
-    val_acc = tm.Accuracy(task='binary', average='macro').to(device)
+    val_acc = tm.Accuracy(task='binary', average='micro').to(device)
     val_bce = nn.BCELoss()
     val_loss_hist = []
 
@@ -570,7 +574,7 @@ def validate(model, dl):
 def train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion):
     pbar = tqdm(total=epochs*len(train_dl))
     model.train()
-    train_acc = tm.Accuracy(task='binary', average='macro').to(device)
+    train_acc = tm.Accuracy(task='binary', average='micro').to(device)
     last_val_acc = -1
 
     val_acc_hist = []
@@ -607,12 +611,34 @@ def train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion):
 
 
 # %%
+import timm
+class GalaxyMergerClassifier(nn.Module):
+    def __init__(self, encoder, num_classes=2):
+        super().__init__()
+        self.encoder = encoder
+        self.classifier = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(encoder.num_features, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, num_classes)
+        )
+
+    def forward(self, x):
+        features = self.encoder(x)
+        return self.classifier(features)
+
+# 2. Create the model
+encoder = timm.create_model('hf_hub:mwalmsley/zoobot-encoder-convnext_nano', pretrained=True, num_classes=0)
+model = GalaxyMergerClassifier(encoder)
+
+# %%
 model = HeavyCNN().to(device)
 criterion = nn.BCELoss()
 optimizer = AdamW(model.parameters(), lr=1e-4)
 scheduler = CosineAnnealingLR(optimizer, T_max=15, eta_min=1e-6)
 epochs = 30
-
 
 # %%
 summary(model, (3, 72, 72));
@@ -628,9 +654,18 @@ history = {
 }
 
 i = 0
-while os.path.exists(f'history_{experiment_name}_{i}.pkl'):
+while os.path.exists(f'results/history_{experiment_name}_{i}.pkl'):
     i += 1
-pickle.dump(history, open(f'history_{experiment_name}_{i}.pkl', 'wb'))
+pickle.dump(history, open(f'results/history_{experiment_name}_{i}.pkl', 'wb'))
+torch.save({
+    'model_state_dict': model.state_dict(),
+    'optimizer_state_dict': optimizer.state_dict(),
+    'scheduler_state_dict': scheduler.state_dict(),
+    'model': model,	
+    'optimizer': optimizer,
+    'scheduler': scheduler,
+    'history': history
+}, f'results/model_{experiment_name}_{i}.pt')
 
 # %%
 # pretty plots
@@ -650,6 +685,33 @@ plt.show()
 
 # %%
 validate(model, test_dl)
+
+# %% [markdown]
+# # Compare results
+
+# %%
+hist_a = pickle.load(open('results/history_heavy_augmented_0.pkl', 'rb'))
+hist_b = pickle.load(open('results/history_heavy_0.pkl', 'rb'))
+
+# %%
+# pretty comparing plots
+plt.figure(figsize=(12, 6))
+plt.subplot(1, 2, 1)
+plt.plot(hist_a['train_loss'], label='train_augmented')
+plt.plot(hist_a['val_loss'], label='val_augmented')
+plt.plot(hist_b['train_loss'], label='train')
+plt.plot(hist_b['val_loss'], label='val')
+plt.title('Loss')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(hist_a['train_acc'], label='train_augmented')
+plt.plot(hist_a['val_acc'], label='val_augmented')
+plt.plot(hist_b['train_acc'], label='train')
+plt.plot(hist_b['val_acc'], label='val')
+plt.title('Accuracy')
+plt.legend()
+plt.show()
 
 # %% [markdown]
 # # Tensorflow stuff

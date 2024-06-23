@@ -87,9 +87,9 @@ def background_subtraction_dataset(dataset, gmm=None, gmm_type='precomputed_full
     elif gmm_type == 'new':
         gmm = background_modeling(dataset)
     elif gmm_type == 'precomputed_5k':
-        gmm = pickle.load(open('precomputed/gmm_model_5k.pkl', 'rb'))
+        gmm = pickle.load(open('gmm_precomputed/gmm_model_5k.pkl', 'rb'))
     elif gmm_type == 'precomputed_full':
-        gmm = pickle.load(open('precomputed/gmm_model.pkl', 'rb'))
+        gmm = pickle.load(open('gmm_precomputed/gmm_model_full.pkl', 'rb'))
 
     background_subtracted_dataset = np.zeros_like(dataset)
     for i in range(dataset.shape[0]):
