@@ -307,7 +307,7 @@ X_fft = fourierDenoise.denoise_dataset(X)
 
 # %%
 fig = plt.figure(figsize=(12, 12))
-sample = X_fft[4399]
+sample = X[4399]
 for band in range(3):
     ax = fig.add_subplot(1, 3, band+1)
     img_fft = fftpack.fft2(sample[:,:,band])    # 2 dimensional fast fourier transform of a single band of the image
@@ -343,6 +343,9 @@ ax.title.set_text(f'Filtered Image: Entropy={filtered_entropy:.2f} (~{filtered_e
 ax.axis('off')
 plt.show()
 
+# %%
+plot_transformed_samples(fourierDenoise.denoise_sample, x=X, y=y, num_samples=3, band_wise_transform=False)
+
 # %% [markdown]
 # The following data visualization shows how critical is the choice of the percentage of kept frequencies. Keeping a low 
 
@@ -362,7 +365,7 @@ plot_transformed_samples(morphologicalDenoise.top_hat_transform, seed=206265, x=
 plot_transformed_samples(gmmDenoise.background_subtraction, seed=206265, x=X, y=y, num_samples=1, band_wise_transform=False)
 
 # %%
-X_gmm = gmmDenoise.denoise_dataset(X)
+X_gmm = gmmDenoise.background_subtraction_dataset(X)
 
 # %% [markdown]
 # ### Denoising with U-Net

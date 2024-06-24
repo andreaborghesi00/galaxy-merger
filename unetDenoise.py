@@ -2,6 +2,7 @@ import numpy as np
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, concatenate
 
+# i know this uses a different framework (keras) instead of pytorch as for main.py, but i did it before i knew i could use pytorch for this task
 def model(input_shape):
     """
     Creates a U-Net denoising model.
