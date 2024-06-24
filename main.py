@@ -393,12 +393,13 @@ plot_orig_samples(x=X_unet, y=y, num_samples=5)
 
 # %%
 # Choose dataset
-experiment_name = "gmm_heavy"
+experiment_name = "fft_heavy_augmented"
 random_state = 42
 X = np.load('datasets/dataset.npy')
-X = gmmDenoise.background_subtraction_dataset(X)
-X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.2, random_state=random_state)
-X_test, X_val, y_test, y_val = train_test_split(X_valtest, y_valtest, test_size=0.5, random_state=random_state)
+# X = gmmDenoise.background_subtraction_dataset(X) # GMM dataset
+X = fourierDenoise.denoise_dataset(X) # FFT dataset
+X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.3, random_state=random_state)
+X_test, X_val, y_test, y_val = train_test_split(X_valtest, y_valtest, test_size=0.33333, random_state=random_state)
 X_train[0].shape
 
 
@@ -410,12 +411,12 @@ class GalaxyDataset(Dataset):
         self.transform = transform
         # channel last to channel first
         if transform is None:
-            print('Transforming images')
             self.X = np.moveaxis(self.X, -1, 1)
         self.y = np.expand_dims(self.y, axis=1)
         # x to tensor
-        # self.X = torch.tensor(self.X, dtype=torch.float32)
-        # self.y = torch.tensor(self.y, dtype=torch.float32)
+        if transform is None:
+            self.X = torch.tensor(self.X, dtype=torch.float32)
+        self.y = torch.tensor(self.y, dtype=torch.float32)
 
     def __len__(self):
         return len(self.X)
@@ -425,6 +426,9 @@ class GalaxyDataset(Dataset):
             return self.transform(image=self.X[idx])['image'], self.y[idx]
         return self.X[idx], self.y[idx]
 
+
+# %% [markdown]
+# ### Data augmentation
 
 # %%
 augmentations = albus.Compose([
@@ -436,12 +440,12 @@ augmentations = albus.Compose([
 ])
 
 # %%
-train_ds = GalaxyDataset(X_train, y_train)
+train_ds = GalaxyDataset(X_train, y_train, transform=augmentations)
 val_ds = GalaxyDataset(X_val, y_val)
 test_ds = GalaxyDataset(X_test, y_test)
 
 # %%
-train_ds.__getitem__(0)[0].shape
+train_ds.__getitem__(19)[1]
 
 # %%
 batch_size = 256
@@ -551,6 +555,82 @@ class HeavyCNN(nn.Module):
 
 
 # %%
+from zoobot.pytorch.training.finetune import FinetuneableZoobotClassifier
+import timm
+# or FinetuneableZoobotRegressor, or FinetuneableZoobotTree
+
+import torch.nn as nn
+
+class CustomHead(nn.Module):
+    def __init__(self, input_dim, dropout_rate=0.3):
+        super().__init__()
+        self.gelu = nn.GELU()
+
+        self.fc1 = nn.Linear(input_dim, 1024)
+        self.dropout = nn.Dropout(dropout_rate)
+        
+        self.fc2 = nn.Linear(1024, 512)
+        self.dropout = nn.Dropout(dropout_rate)
+        
+        self.fc3 = nn.Linear(512, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.gelu(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        x = self.gelu(x)
+        x = self.dropout(x)
+        x = self.fc3(x)
+        x = self.sigmoid(x)
+        return x
+    
+
+
+class GalaxyMergerClassifier(nn.Module):
+    def __init__(self, encoder):
+        super().__init__()
+        self.encoder = encoder
+        
+        # Freeze the encoder parameters
+        for param in self.encoder.encoder.parameters():
+            param.requires_grad = False
+        
+        # Unfreeze the custom head parameters
+        for param in self.encoder.head.parameters():
+            param.requires_grad = True
+
+    def forward(self, x):
+        # x should be your input tensor of shape (batch_size, 3, 75, 75)
+        features = self.encoder.forward_features(x)
+        output = self.encoder.head(features)
+        return output
+
+
+# %%
+import timm
+class GalaxyMergerClassifier(nn.Module):
+    def __init__(self, encoder, num_classes=2):
+        super().__init__()
+        self.encoder = encoder
+        self.classifier = nn.Sequential(
+            nn.Linear(69, 1024),
+            nn.GELU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, num_classes)
+        )
+
+    def forward(self, x):
+        features = self.encoder(x)
+        print(features.shape)
+        return self.classifier(features)
+
+# 2. Create the model
+# encoder = timm.create_model('hf_hub:mwalmsley/zoobot-encoder-convnext_nano', pretrained=True, num_classes=2)
+
+
+# %%
 def validate(model, dl):
     model.eval()
     val_acc = tm.Accuracy(task='binary', average='micro').to(device)
@@ -599,7 +679,7 @@ def train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion):
             train_acc.update(out, y)
             local_train_acc_hist.append(train_acc.compute().item())
             local_train_loss_hist.append(loss.item())
-            pbar.set_description(f'Epoch {epoch+1}/{epochs}, Loss: {loss.item():.4f}, Accuracy: {local_train_acc_hist[-1]:.4f}, val_acc (previous): {last_val_acc:.4f}')
+            pbar.set_description(f'Epoch {epoch+1}/{epochs}, Loss: {loss.item():.4f}, Accuracy: {local_train_acc_hist[-1]:.4f}, val_acc (previous): {last_val_acc:.4f} | best_val_acc: {max(val_acc_hist) if len(val_acc_hist) > 0 else -1:.4f} at epoch {np.argmax(val_acc_hist)+1 if len(val_acc_hist) > 0 else -1}')
             pbar.update(1)
         train_acc_hist.append(np.mean(local_train_acc_hist))
 
@@ -611,34 +691,19 @@ def train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion):
 
 
 # %%
-import timm
-class GalaxyMergerClassifier(nn.Module):
-    def __init__(self, encoder, num_classes=2):
-        super().__init__()
-        self.encoder = encoder
-        self.classifier = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(encoder.num_features, 512),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(512, num_classes)
-        )
+# model = GalaxyMergerClassifier(encoder).to(device)
 
-    def forward(self, x):
-        features = self.encoder(x)
-        return self.classifier(features)
+# encoder = FinetuneableZoobotClassifier(name='hf_hub:mwalmsley/zoobot-encoder-convnext_nano', num_classes=2)
+# encoder_output_dim = encoder.encoder_dim
 
-# 2. Create the model
-encoder = timm.create_model('hf_hub:mwalmsley/zoobot-encoder-convnext_nano', pretrained=True, num_classes=0)
-model = GalaxyMergerClassifier(encoder)
-
-# %%
+# # Create and set the new custom head
+# new_head = CustomHead(input_dim=encoder_output_dim)
+# encoder.head = new_headcriterion = nn.BCELoss()
 model = HeavyCNN().to(device)
+optimizer = AdamW(model.parameters(), lr=2e-5)
+scheduler = CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-6)
+epochs = 250
 criterion = nn.BCELoss()
-optimizer = AdamW(model.parameters(), lr=1e-4)
-scheduler = CosineAnnealingLR(optimizer, T_max=15, eta_min=1e-6)
-epochs = 30
 
 # %%
 summary(model, (3, 72, 72));
@@ -665,7 +730,7 @@ torch.save({
     'optimizer': optimizer,
     'scheduler': scheduler,
     'history': history
-}, f'results/model_{experiment_name}_{i}.pt')
+}, f'results/model_{experiment_name}_{i}.pth')
 
 # %%
 # pretty plots
@@ -715,310 +780,6 @@ plt.show()
 
 # %% [markdown]
 # # Tensorflow stuff
-
-# %%
-from keras.optimizers import SGD
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.optimizers import Adam, AdamW
-from tensorflow.keras.regularizers import l2
-
-
-def heavy_cnn(initial_input_shape):
-    
-    model = Sequential()
-    model.add(Conv2D(32, kernel_size=(6, 6), activation='gelu', input_shape=initial_input_shape, padding='same'))
-    model.add(BatchNormalization())
-    model.add(Conv2D(32, kernel_size=(6, 6), activation='gelu', input_shape=initial_input_shape, padding='same'))
-    model.add(BatchNormalization())
-    # model.add(Dropout(.2))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    
-    
-    model.add(Conv2D(64, kernel_size=(5, 5), activation='gelu', padding='same'))
-    model.add(BatchNormalization())
-    model.add(Conv2D(64, kernel_size=(5, 5), activation='gelu', padding='same'))
-    model.add(BatchNormalization())
-    # model.add(Dropout(.2))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    
-    model.add(Conv2D(128, kernel_size=(3, 3), activation='gelu', padding='same'))
-    # model.add(BatchNormalization())
-    # model.add(Dropout(.2))
-    model.add(Conv2D(128, kernel_size=(3, 3), activation='gelu', padding='same'))
-    model.add(BatchNormalization())
-    # model.add(Dropout(.2))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    
-    model.add(Conv2D(256, kernel_size=(3, 3), activation='gelu', padding='same'))
-    model.add(BatchNormalization())
-    model.add(Conv2D(256, kernel_size=(3, 3), activation='gelu', padding='same'))
-    model.add(BatchNormalization())
-    # model.add(Dropout(.2))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    model.add(Flatten())
-    model.add(Dense(1024, activation='gelu'))
-    model.add(Dropout(.2))
-    model.add(Dense(1024, activation='gelu'))
-    model.add(Dropout(.2))
-    
-    model.add(Dense(1, activation='sigmoid'))
-    
-    # opt = SGD(learning_rate=0.01, momentum=0.9)
-    opt = AdamW(learning_rate=0.00005)
-    
-    model.compile(loss='binary_crossentropy', optimizer=opt, metrics=['accuracy'])
-    model.summary()
-    
-    return model
-    
-    
-
-# %%
-def create_galaxy_merger_model(input_shape=(72, 72, 3), trainable_base=False):
-    # Load the pretrained EfficientNetB0 model
-    base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=input_shape)
-    
-    # Freeze the base model if trainable_base is False
-    base_model.trainable = trainable_base
-    
-    # Create the new model
-    model = models.Sequential([
-        base_model,
-        GlobalAveragePooling2D(),
-        Dense(1024, activation='gelu'),
-        Dropout(0.5),
-        Dense(1, activation='sigmoid')
-    ])
-    
-    # Compile the model
-    model.compile(
-        optimizer=tf.keras.optimizers.AdamW(learning_rate=1e-4),
-        loss='binary_crossentropy',
-        metrics=['accuracy']
-    )
-    model.summary()
-    return model
-
-def preprocess_image(image):
-    # image = tf.image.resize(image, (224, 224))
-    image = tf.keras.applications.efficientnet.preprocess_input(image)
-    return image
-
-
-
-# %%
-import timm
-from huggingface_hub import login
-
-login("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")
-
-
-# %%
-encoder = timm.create_model('hf_hub:mwalmsley/zoobot-encoder-convnext_nano', pretrained=True, num_classes=0)
-
-# %%
-import tensorflow as tf
-import torch
-import timm
-
-class TFZoobotEncoder(tf.keras.Model):
-    def __init__(self, pytorch_model):
-        super(TFZoobotEncoder, self).__init__()
-        self.pytorch_model = pytorch_model
-        
-    @tf.function
-    def call(self, inputs):
-        # Convert TensorFlow tensor to PyTorch tensor
-        x = tf.transpose(inputs, [0, 3, 1, 2])  # NHWC to NCHW
-        x = tf.cast(x, tf.float32)
-        
-        # Run inference
-        features = tf.py_function(self._run_pytorch_model, [x], tf.float32)
-        
-        # Ensure the output shape is set
-        features.set_shape([None, 768, None, None])  # Adjust the 768 if your model outputs a different number of channels
-        return features
-    
-    def _run_pytorch_model(self, x):
-        x_torch = torch.from_numpy(x.numpy())
-        with torch.no_grad():
-            features = self.pytorch_model(x_torch)
-        return features.numpy()
-
-# Load the PyTorch model
-encoder_pt = timm.create_model('hf_hub:mwalmsley/zoobot-encoder-convnext_nano', pretrained=True, num_classes=0)
-encoder_pt.eval()
-
-# Create TensorFlow wrapper
-encoder_tf = TFZoobotEncoder(encoder_pt)
-
-# Create the full model
-def create_galaxy_merger_model(encoder, num_classes=2):
-    inputs = tf.keras.Input(shape=(72, 72, 3))
-    x = encoder(inputs)
-    x = tf.keras.layers.GlobalAveragePooling2D()(x)
-    x = tf.keras.layers.Dense(512, activation='relu')(x)
-    x = tf.keras.layers.Dropout(0.3)(x)
-    outputs = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
-    
-    model = tf.keras.Model(inputs=inputs, outputs=outputs)
-    return model
-
-model = create_galaxy_merger_model(encoder_tf)
-
-# Compile the model
-model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-    loss='sparse_categorical_crossentropy',
-    metrics=['accuracy']
-)
-
-model.summary()
-
-# %%
-# #Place your CNN here
-# from keras.optimizers import SGD
-# from tensorflow.keras.models import Sequential
-# from tensorflow.keras.optimizers import Adam
-# from tensorflow.keras.regularizers import l2
-
-
-def deep_merge(initial_input_shape):
-    
-    model = Sequential()
-    model.add(Conv2D(8, kernel_size=(5, 5), activation='relu', input_shape=initial_input_shape, padding='same'))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2), padding='valid'))
-    model.add(Dropout(.5))
-    
-    
-    model.add(Conv2D(16, kernel_size=(3, 3), activation='relu', padding='same'))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2), padding='valid'))
-    model.add(Dropout(.5))
-    
-    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu', padding='same'))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D(pool_size=(2, 2), padding='valid'))
-    model.add(Dropout(.5))
-    
-    model.add(Flatten())
-    model.add(Dense(64, activation='softmax', kernel_regularizer=tf.keras.regularizers.L2(0.0001)))
-    model.add(Dense(32, activation='softmax', kernel_regularizer=tf.keras.regularizers.L2(0.0001)))
-    
-    model.add(Dense(1, activation='sigmoid'))
-    
-    # opt = SGD(learning_rate=0.01, momentum=0.9)
-    opt = Adam(learning_rate=0.0001)
-    
-    model.compile(loss='binary_crossentropy', optimizer=opt, metrics=['accuracy'])
-    model.summary()
-    
-    return model
-    
-    
-
-# %% [markdown]
-# Next, we compile the model. You can use the Adam opmimizer and the binary cross entropy loss function (as this is a binary classification problem).
-#
-# You can learn more about optimizers and more about loss functions for regression tasks in the Keras documentation.
-
-# %% [markdown]
-# ## Training
-
-# %%
-import functools
-
-# %%
-# data augmentation
-datagen = ImageDataGenerator(
-    rotation_range=20,  # Random rotation between 0 and 20 degrees
-    width_shift_range=0.2,  # Random horizontal shift
-    height_shift_range=0.2,  # Random vertical shift
-    horizontal_flip=True,  # Random horizontal flip
-    zoom_range=0.2,  # Random zoom
-    shear_range=0.2,  # Random shear
-    fill_mode='nearest',  # Strategy for filling in newly created pixels
-)
-
-# X_train = map(preprocess_image, X_train)
-# X_train = np.array(list(X_train))
-
-# X_val = map(preprocess_image, X_val)
-# X_val = np.array(list(X_val))
-# Assume x_train is your training data (shape: (num_samples, height, width, channels))
-# and y_train is your labels
-
-# Fit the ImageDataGenerator to your data
-datagen.fit(X_train)
-
-# %%
-nb_epoch = 40
-shuffle = True
-
-# stop_early = EarlyStopping(monitor='val_loss', patience=8, restore_best_weights=True)
-augmented_data_generator = datagen.flow(X_train, y_train, batch_size=batch_size)
-model = heavy_cnn(X_train.shape[1:])
-
-# model = create_galaxy_merger_model(X_train.shape[1:], trainable_base=True)
-
-
-# %%
-X.shape
-
-# %%
-with tf.device('/GPU:0'):
-    history = model.fit(augmented_data_generator, validation_data=(X_val, y_val), epochs=nb_epoch, batch_size=batch_size, shuffle=shuffle)
-
-# %% [markdown]
-# To visualize the performance of the CNN, we plot the evolution of the accuracy and loss as a function of training epochs, for the training set and for the validation set.
-
-# %% [markdown]
-# ## Testing and result analysis
-
-# %%
-# Plot (accuracy, val accuracy, loss and val loss) vs epoch
-
-pickle.dump(history.history, open(f'results/history_{experiment_name}.pkl', 'wb'))
-
-plt.title('model loss')
-plt.plot(history.history['accuracy'], label='train')
-plt.plot(history.history['val_accuracy'], label='val')
-plt.show()
-plt.title('model accuracy')
-plt.plot(history.history['loss'], label='train')
-plt.plot(history.history['val_loss'], label='val')
-# plt.ylabel('loss/accuracy')
-plt.xlabel('epoch')
-plt.legend(['train_acc', 'val_acc', 'train_loss', 'val_loss'], loc='upper left')
-plt.show()
-
-# %%
-load_hist = pickle.load(open(f'results/history_{experiment_name}.pkl', 'rb'))
-
-plt.title('model loss')
-plt.plot(load_hist['accuracy'], label='train')
-plt.plot(load_hist['val_accuracy'], label='val')
-plt.show()
-
-plt.title('model accuracy')
-plt.plot(load_hist['loss'], label='train')
-plt.plot(load_hist['val_loss'], label='val')
-plt.xlabel('epoch')
-plt.legend(['train_acc', 'val_acc', 'train_loss', 'val_loss'], loc='upper left')
-plt.show()
-
-# %% [markdown]
-# Observe how the loss for the validation set is higher than for the training set (and conversely, the accuracy for the validation set is lower than for the training set), suggesting that this model is suffering from overfitting.
-#
-# Over-fitting of the network model is mitigated by the use of regularization through dropout of some % during training, applied after all convolutional layers.
-#
-# You can also recompile the model, train for many more epochs, and include a callback, in cnn.train e.g.,
-# callback = EarlyStopping(monitor='val_loss', mode='min', verbose=1, patience=50)
-
-# %% [markdown]
-# Now Plot a confusion Matrix (Merger vs non-merger)
 
 # %%
 # Evaluate the network performance here
