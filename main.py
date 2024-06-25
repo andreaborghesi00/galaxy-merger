@@ -26,6 +26,7 @@ import os
 import albumentations as albus
 from albumentations.pytorch import ToTensorV2
 
+
 # fits
 from astropy.io import fits
 from astropy.utils.data import download_file
@@ -74,11 +75,11 @@ import unetDenoise
 
 
 # load data
-y = np.load('datasets/labels.npy')
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # %%
 X = np.load('datasets/dataset.npy')
+y = np.load('datasets/labels.npy')
 
 # %%
 # gpu_devices = tf.config.experimental.list_physical_devices('GPU')
@@ -89,7 +90,6 @@ X = np.load('datasets/dataset.npy')
 # ## Data retrieval
 
 # %%
-# %%time
 version = 'noisy' # pristine or noisy. Pristine has infinite S/N, noisy has realistic S/N
 file_url = 'https://archive.stsci.edu/hlsps/deepmerge/hlsp_deepmerge_hst-jwst_acs-wfc3-nircam_illustris-z2_f814w-f160w-f356w_v1_sim-'+version+'.fits'
 
@@ -166,14 +166,15 @@ print(example_ids)
 # X = np.asarray(hdu[0].data).astype('float32')
 # y = np.asarray(hdu[1].data).astype('float32')
 
+
 # %%
 # switch to channel last format
 # X = np.moveaxis(X, 1, -1)
-X.shape
+# X.shape
 
 # %%
-# np.save('dataset.npy', X)
-# np.save('labels.npy', y)
+# np.save('datasets/dataset.npy', X)
+# np.save('datasets/labels.npy', y)
 
 # %% [markdown]
 # ## Denoising
@@ -353,16 +354,48 @@ plot_transformed_samples(fourierDenoise.denoise_sample, x=X, y=y, num_samples=3,
 # ### Morphology-based denoising
 
 # %%
-plot_transformed_samples(morphologicalDenoise.rolling_ball_background_subtraction, x=X, y=y, num_samples=1, band_wise_transform=True, radius=5)
+plot_transformed_samples(morphologicalDenoise.rolling_ball_background_subtraction, x=X, y=y, num_samples=3, band_wise_transform=True, radius=5)
 
 # %%
-plot_transformed_samples(morphologicalDenoise.top_hat_transform, seed=206265, x=X, y=y, num_samples=1, band_wise_transform=True, radius=2)
+from skimage.morphology import disk, binary_erosion, white_tophat
+
+
+# %%
+sample = X[4399]
+print(sample.shape)
+
+
+def top_transform(image, radius):
+    top_hat = np.zeros_like(image)
+    for band in range(3):
+        top_hat[:,:,band] = white_tophat(image[:,:,band], disk(5))
+    return top_hat
+
+transformed_image = top_transform(sample, 5)
+fig = plt.figure(figsize=(12, 12))
+for band in range(3):
+    ax = fig.add_subplot(1, 3, band+1)
+    ax.imshow(transformed_image[:,:,band], cmap='binary_r')
+    ax.axis('off')
+plt.show()
+
+
+# %%
+plot_transformed_samples(morphologicalDenoise.top_hat_transform, x=X, y=y, num_samples=3, band_wise_transform=False, radius=5)
+
+
+# %%
+
+# %%
+plot_transformed_samples(morphologicalDenoise.top_hat_transform, seed=206265, x=X, y=y, num_samples=3, band_wise_transform=False, radius=2)
 
 # %% [markdown]
 # ### Mixture of models
 
 # %%
-plot_transformed_samples(gmmDenoise.background_subtraction, seed=206265, x=X, y=y, num_samples=1, band_wise_transform=False)
+plot_transformed_samples(gmmDenoise.background_subtraction, seed=206265, x=X, y=y, num_samples=3, band_wise_transform=False)
+
+# %%
 
 # %%
 X_gmm = gmmDenoise.background_subtraction_dataset(X)
@@ -384,6 +417,7 @@ model = unetDenoise.load_model('unet_precomputed/unet_model_4epochs.keras', inpu
 
 # %%
 X_unet = unetDenoise.predict(model, X)
+np.save('datasets/dataset_unet.npy', X_unet)
 
 # %%
 plot_orig_samples(x=X_unet, y=y, num_samples=5)
@@ -396,11 +430,12 @@ plot_orig_samples(x=X_unet, y=y, num_samples=5)
 
 # %%
 # Choose dataset
-experiment_name = "fft_heavy_augmented"
+experiment_name = "tophat_heavy_augmented"
 random_state = 42
 X = np.load('datasets/dataset.npy')
+X = morphologicalDenoise.top_hat_transform_dataset(X, radius=3) # morphological dataset
 # X = gmmDenoise.background_subtraction_dataset(X) # GMM dataset
-X = fourierDenoise.denoise_dataset(X) # FFT dataset
+# X = fourierDenoise.denoise_dataset(X) # FFT dataset
 X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.3, random_state=random_state)
 X_test, X_val, y_test, y_val = train_test_split(X_valtest, y_valtest, test_size=0.33333, random_state=random_state)
 X_train[0].shape
@@ -558,58 +593,57 @@ class HeavyCNN(nn.Module):
 
 
 # %%
-from zoobot.pytorch.training.finetune import FinetuneableZoobotClassifier
-import timm
-# or FinetuneableZoobotRegressor, or FinetuneableZoobotTree
+# from zoobot.pytorch.training.finetune import FinetuneableZoobotClassifier
+# import timm
+# # or FinetuneableZoobotRegressor, or FinetuneableZoobotTree
 
-import torch.nn as nn
+# import torch.nn as nn
 
-class CustomHead(nn.Module):
-    def __init__(self, input_dim, dropout_rate=0.3):
-        super().__init__()
-        self.gelu = nn.GELU()
+# class CustomHead(nn.Module):
+#     def __init__(self, input_dim, dropout_rate=0.3):
+#         super().__init__()
+#         self.gelu = nn.GELU()
 
-        self.fc1 = nn.Linear(input_dim, 1024)
-        self.dropout = nn.Dropout(dropout_rate)
+#         self.fc1 = nn.Linear(input_dim, 1024)
+#         self.dropout = nn.Dropout(dropout_rate)
         
-        self.fc2 = nn.Linear(1024, 512)
-        self.dropout = nn.Dropout(dropout_rate)
+#         self.fc2 = nn.Linear(1024, 512)
+#         self.dropout = nn.Dropout(dropout_rate)
         
-        self.fc3 = nn.Linear(512, 1)
-        self.sigmoid = nn.Sigmoid()
+#         self.fc3 = nn.Linear(512, 1)
+#         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.gelu(x)
-        x = self.dropout(x)
-        x = self.fc2(x)
-        x = self.gelu(x)
-        x = self.dropout(x)
-        x = self.fc3(x)
-        x = self.sigmoid(x)
-        return x
+#     def forward(self, x):
+#         x = self.fc1(x)
+#         x = self.gelu(x)
+#         x = self.dropout(x)
+#         x = self.fc2(x)
+#         x = self.gelu(x)
+#         x = self.dropout(x)
+#         x = self.fc3(x)
+#         x = self.sigmoid(x)
+#         return x
     
 
 
-class GalaxyMergerClassifier(nn.Module):
-    def __init__(self, encoder):
-        super().__init__()
-        self.encoder = encoder
+# class GalaxyMergerClassifier(nn.Module):
+#     def __init__(self, encoder):
+#         super().__init__()
+#         self.encoder = encoder
         
-        # Freeze the encoder parameters
-        for param in self.encoder.encoder.parameters():
-            param.requires_grad = False
+#         # Freeze the encoder parameters
+#         for param in self.encoder.encoder.parameters():
+#             param.requires_grad = False
         
-        # Unfreeze the custom head parameters
-        for param in self.encoder.head.parameters():
-            param.requires_grad = True
+#         # Unfreeze the custom head parameters
+#         for param in self.encoder.head.parameters():
+#             param.requires_grad = True
 
-    def forward(self, x):
-        # x should be your input tensor of shape (batch_size, 3, 75, 75)
-        features = self.encoder.forward_features(x)
-        output = self.encoder.head(features)
-        return output
-
+#     def forward(self, x):
+#         # x should be your input tensor of shape (batch_size, 3, 75, 75)
+#         features = self.encoder.forward_features(x)
+#         output = self.encoder.head(features)
+#         return output
 
 # %%
 import timm
@@ -684,6 +718,8 @@ def train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion):
             local_train_loss_hist.append(loss.item())
             pbar.set_description(f'Epoch {epoch+1}/{epochs}, Loss: {loss.item():.4f}, Accuracy: {local_train_acc_hist[-1]:.4f}, val_acc (previous): {last_val_acc:.4f} | best_val_acc: {max(val_acc_hist) if len(val_acc_hist) > 0 else -1:.4f} at epoch {np.argmax(val_acc_hist)+1 if len(val_acc_hist) > 0 else -1}')
             pbar.update(1)
+            
+        train_loss_hist.append(np.mean(local_train_loss_hist))
         train_acc_hist.append(np.mean(local_train_acc_hist))
 
         last_val_acc, last_val_loss = validate(model, val_dl)
@@ -729,9 +765,12 @@ torch.save({
     'model_state_dict': model.state_dict(),
     'optimizer_state_dict': optimizer.state_dict(),
     'scheduler_state_dict': scheduler.state_dict(),
-    'model': model,	
+    'model': model,
+    'model_name': model.__class__.__name__,
     'optimizer': optimizer,
+    'optimizer_name': optimizer.__class__.__name__,
     'scheduler': scheduler,
+    'scheduler_name': scheduler.__class__.__name__,
     'history': history
 }, f'results/model_{experiment_name}_{i}.pth')
 
@@ -758,25 +797,25 @@ validate(model, test_dl)
 # # Compare results
 
 # %%
-hist_a = pickle.load(open('results/history_heavy_augmented_0.pkl', 'rb'))
-hist_b = pickle.load(open('results/history_heavy_0.pkl', 'rb'))
+hist_a = pickle.load(open('results/history_fft_heavy_augmented_1.pkl', 'rb'))
+hist_b = pickle.load(open('results/history_tophat_heavy_augmented_0.pkl', 'rb'))
 
 # %%
 # pretty comparing plots
 plt.figure(figsize=(12, 6))
 plt.subplot(1, 2, 1)
-plt.plot(hist_a['train_loss'], label='train_augmented')
-plt.plot(hist_a['val_loss'], label='val_augmented')
-plt.plot(hist_b['train_loss'], label='train')
-plt.plot(hist_b['val_loss'], label='val')
+plt.plot(hist_a['train_loss'], label='train FFT')
+plt.plot(hist_a['val_loss'], label='val FFT')
+plt.plot(hist_b['train_loss'], label='train Tophat')
+plt.plot(hist_b['val_loss'], label='val Tophat')
 plt.title('Loss')
 plt.legend()
 
 plt.subplot(1, 2, 2)
-plt.plot(hist_a['train_acc'], label='train_augmented')
-plt.plot(hist_a['val_acc'], label='val_augmented')
-plt.plot(hist_b['train_acc'], label='train')
-plt.plot(hist_b['val_acc'], label='val')
+plt.plot(hist_a['train_acc'], label='train FFT')
+plt.plot(hist_a['val_acc'], label='val FFT')
+plt.plot(hist_b['train_acc'], label='train Tophat')
+plt.plot(hist_b['val_acc'], label='val Tophat')
 plt.title('Accuracy')
 plt.legend()
 plt.show()
