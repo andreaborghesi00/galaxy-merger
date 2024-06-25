@@ -42,7 +42,10 @@ def top_hat_transform(image, radius):
         The result of the top-hat transform.
     """
     # Create a disk-shaped structuring element
-    selem = disk(radius)
+    top_hat = np.zeros_like(image)
+    for band in range(3):
+        top_hat[:,:,band] = white_tophat(image[:,:,band], disk(radius))
+    return top_hat
 
     # Apply the top-hat transform
     top_hat_image = white_tophat(image, selem)
@@ -66,6 +69,7 @@ def rolling_ball_background_subtraction_dataset(dataset, radius):
     background_subtracted_dataset = np.zeros_like(dataset)
     for i in range(dataset.shape[0]):
         background_subtracted_dataset[i] = rolling_ball_background_subtraction(dataset[i], radius)
+        
     return background_subtracted_dataset
 
 def top_hat_transform_dataset(dataset, radius):
@@ -84,5 +88,5 @@ def top_hat_transform_dataset(dataset, radius):
     """
     top_hat_dataset = np.zeros_like(dataset)
     for i in range(dataset.shape[0]):
-        top_hat_dataset[i] = top_hat_transform(dataset[i], radius)
+            top_hat_dataset[i] = top_hat_transform(dataset[i], radius)
     return top_hat_dataset
