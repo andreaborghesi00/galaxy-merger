@@ -205,6 +205,51 @@ def image_entropy(image):
     return entropy
 
 # %%
+def dataset_entropy(X):
+    """
+    Compute the entropy of a dataset.
+
+    Parameters:
+    - X: numpy.ndarray
+        The input dataset as a 4D array.
+
+    Returns:
+    - entropy_mean: float
+        The entropy of the dataset.
+    - entropy_std: float
+        The standard deviation of the entropy of the dataset.
+    """
+    entropies = np.array([image_entropy(image) for image in X])
+    entropy_mean = np.mean(entropies)
+    entropy_std = np.std(entropies)
+
+    return entropy_mean, entropy_std
+
+
+# %%
+def dataset_entropy_diff(X, Y):
+    """
+    Compute the difference in entropy between two datasets.
+
+    Parameters:
+    - X: numpy.ndarray
+        The first input dataset as a 4D array.
+    - Y: numpy.ndarray
+        The second input dataset as a 4D array.
+
+    Returns:
+    - entropy_diff: float
+        The difference in entropy between the two datasets.
+    """
+    entropy_mean_X, _ = dataset_entropy(X)
+    entropy_mean_Y, _ = dataset_entropy(Y)
+
+    entropy_diff = entropy_mean_X - entropy_mean_Y
+
+    return entropy_diff
+
+
+# %%
 def plot_orig_samples(seed=206265, x=X, y=y, num_samples=3):
     # set the random seed to get the same random set of images each time, or comment it out to get different ones!
     np.random.seed(seed)
@@ -273,22 +318,6 @@ def plot_transformed_samples(fun, seed=206265, x=X, y=y, num_samples=3, band_wis
                 ax.axis('off')
                 imgcnt += 1
     plt.show()
-
-# %% [markdown]
-#
-# ### Subtract the median
-
-# %%
-def sub_median(image):
-    median = np.median(image[0:10, :])
-    print(median)
-    return image - median
-
-# %%
-X_sub_median = np.array([np.array([image[:, :, band] - np.median(image[:, :, band]) for band in range(3)]).T for image in X])
-
-# %%
-plot_transformed_samples(sub_median, x=X, y=y, num_samples=3, band_wise_transform=True)
 
 # %% [markdown]
 # ### Fourier Transform 
