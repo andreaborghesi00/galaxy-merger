@@ -16,16 +16,13 @@ def rolling_ball_background_subtraction(image, radius):
     - background_subtracted_image: numpy.ndarray
         The background-subtracted image.
     """
-    # Create a spherical structuring element (rolling ball)
     selem = disk(radius)
+    closed_image = np.zeros_like(image)
+    
+    for band in range(3):
+        closed_image[:, :, band] = minimum_filter(image[:,:,band], footprint=selem)
 
-    # Compute the morphological closing of the image using the rolling ball
-    closed_image = minimum_filter(image, footprint=selem)
-
-    # Compute the background-subtracted image
-    background_subtracted_image = image - closed_image
-
-    return background_subtracted_image
+    return image - closed_image # subtract background approximation from original image
 
 def top_hat_transform(image, radius):
     """

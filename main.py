@@ -233,9 +233,9 @@ def dataset_entropy_diff(X, Y):
 
     Parameters:
     - X: numpy.ndarray
-        The first input dataset as a 4D array.
+        The first input dataset
     - Y: numpy.ndarray
-        The second input dataset as a 4D array.
+        The second input dataset
 
     Returns:
     - entropy_diff: float
@@ -250,7 +250,49 @@ def dataset_entropy_diff(X, Y):
 
 
 # %%
+def denoise_info(filename, fun, verbose=True, *args, **kwargs):
+    """
+    Load or generate denoised information from a dataset file.
+
+    Parameters:
+    - filename (str): The name of the dataset file.
+    - fun (function): The function used to generate denoised information if the file doesn't exist.
+    - verbose (bool): Whether to print the entropy and entropy difference information.
+    - *args: Additional positional arguments to pass to the `fun` function.
+    - **kwargs: Additional keyword arguments to pass to the `fun` function.
+
+    Returns:
+    - entropy (tuple): A tuple containing the entropy value and its standard deviation.
+    - entropy_diff (float): The difference in entropy compared to the original dataset.
+
+    """
+    path = 'datasets/'+filename+'.npy'
+    try:
+        Y = np.load(path)
+    except:
+        Y = fun(X, *args, **kwargs)
+        np.save(path, Y)
+    
+    entropy, entropy_diff = dataset_entropy(Y), dataset_entropy_diff(Y, X)
+    if verbose: print(f'{filename}: Entropy={entropy[0]:.2f} +/- {entropy[1]:.2f}, Diff={entropy_diff:.2f}')
+    return entropy, entropy_diff
+
+
+# %%
 def plot_orig_samples(seed=206265, x=X, y=y, num_samples=3):
+    """
+    Plot original samples from a simulated dataset.
+
+    Parameters:
+    - seed (int): Random seed to get the same random set of images each time. Default is 206265.
+    - x (numpy.ndarray): Input images dataset. Default is X.
+    - y (numpy.ndarray): Labels for the input images dataset. Default is y.
+    - num_samples (int): Number of random samples to plot. Default is 3.
+
+    Returns:
+    None
+    """
+
     # set the random seed to get the same random set of images each time, or comment it out to get different ones!
     np.random.seed(seed)
 
@@ -276,7 +318,23 @@ def plot_orig_samples(seed=206265, x=X, y=y, num_samples=3):
 
 # %%
 def plot_transformed_samples(fun, seed=206265, x=X, y=y, num_samples=3, band_wise_transform=False,*args, **kwargs):
-        # set the random seed to get the same random set of images each time, or comment it out to get different ones!
+    """
+    Plot transformed samples.
+
+    Parameters:
+    - fun: The transformation function to apply to the images.
+    - seed: The random seed to get the same random set of images each time.
+    - x: The input dataset of images.
+    - y: The labels for the images.
+    - num_samples: The number of random images to select and plot.
+    - band_wise_transform: Whether to apply the transformation function band-wise or to the entire image.
+    - *args, **kwargs: Additional arguments to pass to the transformation function.
+
+    Returns:
+    None
+    """
+
+    # set the random seed to get the same random set of images each time, or comment it out to get different ones!
     np.random.seed(seed)
 
     # select 16 random image indices:
@@ -330,7 +388,7 @@ def plot_transformed_samples(fun, seed=206265, x=X, y=y, num_samples=3, band_wis
 plot_transformed_samples(fourierDenoise.denoise_sample, x=X, y=y, num_samples=1, band_wise_transform=False)
 
 # %%
-X_fft = fourierDenoise.denoise_dataset(X)
+denoise_info('dataset_fft', fourierDenoise.denoise_dataset, verbose=True);
 
 # %% [markdown]
 # #### Fourier explanation
@@ -382,41 +440,26 @@ plot_transformed_samples(fourierDenoise.denoise_sample, x=X, y=y, num_samples=3,
 # %% [markdown]
 # ### Morphology-based denoising
 
-# %%
-plot_transformed_samples(morphologicalDenoise.rolling_ball_background_subtraction, x=X, y=y, num_samples=3, band_wise_transform=True, radius=5)
+# %% [markdown]
+# #### Rollling ball background subtraction
 
 # %%
-from skimage.morphology import disk, binary_erosion, white_tophat
-
+plot_transformed_samples(morphologicalDenoise.rolling_ball_background_subtraction, x=X, y=y, num_samples=3, band_wise_transform=False, radius=5)
 
 # %%
-sample = X[4399]
-print(sample.shape)
 
 
-def top_transform(image, radius):
-    top_hat = np.zeros_like(image)
-    for band in range(3):
-        top_hat[:,:,band] = white_tophat(image[:,:,band], disk(5))
-    return top_hat
+denoise_info('dataset_bg_sub', morphologicalDenoise.rolling_ball_background_subtraction, radius=5);
 
-transformed_image = top_transform(sample, 5)
-fig = plt.figure(figsize=(12, 12))
-for band in range(3):
-    ax = fig.add_subplot(1, 3, band+1)
-    ax.imshow(transformed_image[:,:,band], cmap='binary_r')
-    ax.axis('off')
-plt.show()
-
+# %% [markdown]
+# #### Rolling ball top hat
 
 # %%
 plot_transformed_samples(morphologicalDenoise.top_hat_transform, x=X, y=y, num_samples=3, band_wise_transform=False, radius=5)
 
 
 # %%
-
-# %%
-plot_transformed_samples(morphologicalDenoise.top_hat_transform, seed=206265, x=X, y=y, num_samples=3, band_wise_transform=False, radius=2)
+denoise_info('dataset_tophat', morphologicalDenoise.top_hat_transform_dataset, radius=5);
 
 # %% [markdown]
 # ### Mixture of models
@@ -425,12 +468,10 @@ plot_transformed_samples(morphologicalDenoise.top_hat_transform, seed=206265, x=
 plot_transformed_samples(gmmDenoise.background_subtraction, seed=206265, x=X, y=y, num_samples=3, band_wise_transform=False)
 
 # %%
-
-# %%
-X_gmm = gmmDenoise.background_subtraction_dataset(X)
+denoise_info('dataset_gmm', gmmDenoise.background_subtraction_dataset, verbose=True);
 
 # %% [markdown]
-# ### Denoising with U-Net
+# ### Autoencoders: U-Net
 
 # %%
 random_state = 0
@@ -445,11 +486,12 @@ input_shape = X_train.shape[1:]
 model = unetDenoise.load_model('unet_precomputed/unet_model_4epochs.keras', input_shape)
 
 # %%
-X_unet = unetDenoise.predict(model, X)
-np.save('datasets/dataset_unet.npy', X_unet)
+denoise_info('dataset_unet', unetDenoise.predict, model=model, verbose=True);
 
 # %%
-plot_orig_samples(x=X_unet, y=y, num_samples=5)
+X_unet = np.load('datasets/dataset_unet.npy')
+plot_orig_samples(x=X_unet, y=y, num_samples=3)
+del X_unet
 
 # %% [markdown]
 # Next, reshape the image array as follows: (number_of_images, image_width, image_length, 3). This is a “channels last” approach, where the final axis denotes the number of “spectral bands”. CNN’s will work with an arbitrary number of channels.

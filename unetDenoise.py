@@ -92,5 +92,5 @@ def load_model(model_path, input_shape, optimizer='adam', loss='mse'):
     unet_model.load_weights(model_path)
     return unet_model
 
-def predict(model, sample):
+def predict(sample, model):
     return model.predict(sample)
