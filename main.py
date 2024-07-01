@@ -25,6 +25,7 @@ import pickle
 import os
 import albumentations as albus
 from albumentations.pytorch import ToTensorV2
+import gc
 
 
 # fits
@@ -501,15 +502,20 @@ del X_unet
 
 # %%
 # Choose dataset
-experiment_name = "tophat_heavy_augmented"
+# Dataset root: 'datasets/'
+# Available dataset types: '', 'fft', 'bg_sub', 'tophat', 'gmm', 'unet'
+dataset_type = 'fft'
+
+experiment_name = f"{dataset_type}_heavy_augmented"
 random_state = 42
-X = np.load('datasets/dataset.npy')
-X = morphologicalDenoise.top_hat_transform_dataset(X, radius=3) # morphological dataset
-# X = gmmDenoise.background_subtraction_dataset(X) # GMM dataset
-# X = fourierDenoise.denoise_dataset(X) # FFT dataset
+dataset_path = f'datasets/dataset{f"_{dataset_type}" if dataset_type != "" else ""}.npy'
+
+X = np.load(dataset_path)
+print(dataset_path)
+
+# split 70:10:20
 X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.3, random_state=random_state)
 X_test, X_val, y_test, y_val = train_test_split(X_valtest, y_valtest, test_size=0.33333, random_state=random_state)
-X_train[0].shape
 
 
 # %%
@@ -664,6 +670,106 @@ class HeavyCNN(nn.Module):
 
 
 # %%
+class DeepMerge(Module):
+    def __init__(self):
+        super(DeepMerge, self).__init__()
+        self.conv1 = Sequential(
+            Conv2d(3, 8, kernel_size=5, padding=2),
+            ReLU(),
+            BatchNorm2d(8),
+            MaxPool2d(2),
+            Dropout2d(0.5)
+        )  # output size 37x37
+
+        self.conv2 = Sequential(
+            Conv2d(8, 16, kernel_size=3, padding=1),
+            ReLU(),
+            BatchNorm2d(16),
+            MaxPool2d(2),
+            Dropout2d(0.5)
+        )  # output size 18x18
+
+        self.conv3 = Sequential(
+            Conv2d(16, 32, kernel_size=3, padding=1),
+            ReLU(),
+            BatchNorm2d(32),
+            MaxPool2d(2),
+            Dropout2d(0.5)
+        )  # output size 9x9
+
+        self.fc1 = Sequential(
+            Linear(32*9*9, 64),
+            nn.Softmax(dim=1),
+            Linear(64, 32),
+            nn.Softmax(dim=1),
+            Linear(32, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = x.view(x.size(0), -1)  # Flatten the tensor
+        x = self.fc1(x)
+        return x
+
+
+# %%
+class ClassifierHead(Module):
+    def __init__(self, in_features):
+        super(ClassifierHead, self).__init__()
+        self.fc1 = nn.Sequential(
+            Linear(in_features, 1024),
+            GELU(),
+            Dropout2d(0.5),
+            Linear(1024, 512),
+            GELU(),
+            Dropout2d(0.5),
+            Linear(512, 1),
+            Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.fc1(x)
+
+
+# %%
+from torchvision.models import resnet50, ResNet50_Weights
+
+resnet = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+
+# %%
+for child in resnet.children():
+    print(child)
+
+# %%
+for child in resnet.named_children():
+    print(child)
+
+# %%
+
+# %%
+in_features = resnet.fc.in_features
+resnet.fc = ClassifierHead(in_features)
+
+
+# %%
+resnet = resnet.to(device)
+resnet.fc
+
+# %%
+summary(resnet, (3, 75, 75));
+
+# %%
+unfreeze_layers = ['layer3','layer4', 'fc']
+for name, param in resnet.named_parameters():
+    if any(layer_name in name for layer_name in unfreeze_layers):
+        param.requires_grad = True
+    else:
+        param.requires_grad = False
+
+# %%
 # from zoobot.pytorch.training.finetune import FinetuneableZoobotClassifier
 # import timm
 # # or FinetuneableZoobotRegressor, or FinetuneableZoobotTree
@@ -816,10 +922,10 @@ epochs = 250
 criterion = nn.BCELoss()
 
 # %%
-summary(model, (3, 72, 72));
+summary(model, (3, 75, 75));
 
 # %%
-train_loss, val_loss, train_acc, val_acc = train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion)
+train_loss, val_loss, train_acc, val_acc = train(resnet, train_dl, val_dl, epochs, optimizer, scheduler, criterion)
 
 history = {
     'train_loss': train_loss,
@@ -863,6 +969,89 @@ plt.show()
 
 # %%
 validate(model, test_dl)
+
+
+# %%
+def bulk_train_test(model_classes, dataset_types, augment = True, batch_size = 256, epochs = 250, random_state = 42, optimizer = None, scheduler = None, criterion = None, lr = 2e-5):
+    for model_class in model_classes:
+        print(f"########## {model_class.__name__} ##########")
+        model = None
+        for dataset_type in dataset_types:
+            if model: 
+                model.cpu()
+                del model
+                gc.collect()
+                torch.cuda.empty_cache()
+                
+            model = model_class().to(device)
+            dataset_name = dataset_type if dataset_type != "" else "noisy"
+            print(f"########## {dataset_name} ##########")
+            experiment_name = f"{dataset_name}_{model_class.__name__}_augmented"
+            random_state = 42
+            dataset_path = f'datasets/dataset{f"_{dataset_type}" if dataset_type != "" else ""}.npy'
+
+            X = np.load(dataset_path)
+
+            # split 70:10:20
+            X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.3, random_state=random_state)
+            X_test, X_val, y_test, y_val = train_test_split(X_valtest, y_valtest, test_size=0.33333, random_state=random_state)
+            
+            train_ds, val_ds, test_ds = GalaxyDataset(X_train, y_train), GalaxyDataset(X_val, y_val), GalaxyDataset(X_test, y_test)
+            train_dl, val_dl, test_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=4), DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=4), DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=4)
+            
+            optimizer = AdamW(model.parameters(), lr=2e-5) if optimizer is None else optimizer
+            scheduler = CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-6) if scheduler is None else scheduler
+            epochs = epochs
+            criterion = nn.BCELoss() if criterion is None else criterion
+            
+            train_loss, val_loss, train_acc, val_acc = train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion)
+
+            history = {
+                'train_loss': train_loss,
+                'val_loss': val_loss,
+                'train_acc': train_acc,
+                'val_acc': val_acc
+            }
+
+            i = 0
+            while os.path.exists(f'results/history_{experiment_name}_{i}.pkl'):
+                i += 1
+            # pickle.dump(history, open(f'results/history_{experiment_name}_{i}.pkl', 'wb'))
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'model': model,
+                'model_name': model.__class__.__name__,
+                'optimizer': optimizer,
+                'optimizer_name': optimizer.__class__.__name__,
+                'scheduler': scheduler,
+                'scheduler_name': scheduler.__class__.__name__,
+                'history': history
+            }, f'results/model_{experiment_name}_{i}.pth')
+            
+            # pretty plots
+            plt.figure(figsize=(12, 6))
+            plt.subplot(1, 2, 1)
+            plt.plot(train_loss, label='train')
+            plt.plot(val_loss, label='val')
+            plt.title('Loss')
+            plt.legend()
+
+            plt.subplot(1, 2, 2)
+            plt.plot(train_acc, label='train')
+            plt.plot(val_acc, label='val')
+            plt.title('Accuracy')
+            plt.legend()
+            plt.show()
+            test_acc, test_loss = validate(model, test_dl)
+            print(f"Model: {model.__class__.__name__}, Experiment: {experiment_name}, Dataset: {dataset_type}, Test (micro) accuracy: {test_acc}, Test loss: {test_loss}")
+            
+                        
+            
+
+# %%
+bulk_train_test([HeavyCNN], ['', 'fft', 'bg_sub', 'tophat', 'gmm', 'unet'], epochs=250)
 
 # %% [markdown]
 # # Compare results
