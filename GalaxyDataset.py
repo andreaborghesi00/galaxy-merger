@@ -81,7 +81,7 @@ def load_dataset(dataset_type="noisy"):
         tuple: A tuple containing the loaded dataset X and the corresponding labels y.
     """
     global datasets_root
-
+    os.makedirs(datasets_root, exist_ok=True)
     dataset_options = ["noisy", "fft", "bg_sub", "top_hat", "unet", "gmm", "pristine"]
     if dataset_type not in dataset_options:
         raise ValueError(f"Invalid dataset type. Available options: {dataset_options}")
@@ -93,7 +93,7 @@ def load_dataset(dataset_type="noisy"):
             y = np.load(os.path.join(datasets_root, 'labels.npy'), allow_pickle=True)
             return X, y
         except FileNotFoundError:
-            if dataset_type == "":
+            if dataset_type == "noisy":
                 version = 'noisy' # pristine or noisy. Pristine has infinite S/N, noisy has realistic S/N
                 file_url = 'https://archive.stsci.edu/hlsps/deepmerge/hlsp_deepmerge_hst-jwst_acs-wfc3-nircam_illustris-z2_f814w-f160w-f356w_v1_sim-'+version+'.fits'
                 hdu = fits.open(download_file(file_url, cache=True, show_progress=True))
@@ -114,7 +114,8 @@ def load_dataset(dataset_type="noisy"):
                 X_pristine = np.moveaxis(X_pristine, 1, -1)
                 np.save('datasets/dataset_pristine.npy', X_pristine)
                 np.save('datasets/labels_pristine.npy', y_pristine)
-
+                return X_pristine, y_pristine
+            
             elif dataset_type == "fft":
                 X, y = load_dataset()
                 X_fft = generate_dataset(X, fourierDenoise.denoise_dataset)
