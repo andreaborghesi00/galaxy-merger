@@ -2,7 +2,7 @@ from skimage.morphology import disk, binary_erosion, white_tophat
 from scipy.ndimage import minimum_filter
 import numpy as np
 
-def rolling_ball_background_subtraction(image, radius):
+def rolling_ball_background_subtraction(image, radius=5):
     """
     Perform background subtraction using the rolling ball algorithm.
 
@@ -20,7 +20,7 @@ def rolling_ball_background_subtraction(image, radius):
     closed_image = np.zeros_like(image)
     
     for band in range(3):
-        closed_image[:, :, band] = minimum_filter(image[:,:,band], footprint=selem)
+        closed_image[:, :, band] = minimum_filter(image[:,:,band], footprint=disk(radius))
 
     return image - closed_image # subtract background approximation from original image
 
