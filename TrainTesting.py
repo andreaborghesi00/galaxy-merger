@@ -4,31 +4,35 @@ import torch
 from tqdm import tqdm
 import torchmetrics as tm
 import torch.optim as optim
+import time
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def validate(model, dl):
+def validate(model, dl, weight=None):
     global device
 
     model.eval()
     val_acc = tm.Accuracy(task='binary', average='micro').to(device)
-    val_bce = nn.BCELoss()
+    val_bce = nn.BCELoss(weight=weight)
     val_loss_hist = []
+    infer_time = []
 
     for x, y in dl:
         x = x.to(device)
         y = y.to(device)
 
         with torch.no_grad():
+            start = time.time()
             out = model(x)
+            infer_time.append(time.time() - start)
             val_acc.update(out, y)
             val_loss = val_bce(out, y)
             val_loss_hist.append(val_loss.item())
 
-    return val_acc.compute().item(), np.mean(val_loss_hist)
+    return val_acc.compute().item(), np.mean(val_loss_hist), np.mean(infer_time)
 
 
-def train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion):
+def train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion, validate_every=1, weight=None):
     global device
     
     pbar = tqdm(total=epochs*len(train_dl))
@@ -41,7 +45,8 @@ def train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion):
 
     val_loss_hist = []
     train_loss_hist = []
-    train_acc 
+    best_model_state_dict = None
+
     for epoch in range(epochs):
         local_train_acc_hist = []
         local_train_loss_hist = []
@@ -64,8 +69,12 @@ def train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion):
         train_loss_hist.append(np.mean(local_train_loss_hist))
         train_acc_hist.append(np.mean(local_train_acc_hist))
 
-        last_val_acc, last_val_loss = validate(model, val_dl)
+        if (epoch) % validate_every == 0:
+            last_val_acc, last_val_loss, _ = validate(model, val_dl, weight)
+            if len(val_acc_hist) == 0 or last_val_acc > max(val_acc_hist):
+                best_model_state_dict = model.state_dict()
+        
         val_acc_hist.append(last_val_acc)
         val_loss_hist.append(last_val_loss)
-    return train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist
+    return train_loss_hist, val_loss_hist, train_acc_hist, val_acc_hist, best_model_state_dict
 
