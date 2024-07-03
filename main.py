@@ -17,19 +17,24 @@ from sklearn.metrics import confusion_matrix
 import albumentations as albus
 from albumentations.pytorch import ToTensorV2
 
+# note: the first time you run this script, it will download two datasets (pristine and noisy)
+# this will take a while, but the datasets will be saved locally for future runs.
+# also, the first time you run this script, denoised datasets will be generated and saved locally for the same reason
+# while doing so it might crash if you don't have enough memory, so be careful, and if it crashes, just run it again, as
+# the datasets will be saved and the script will skip the generation part
 
 if __name__ == "__main__":
-    dataset_types = ["pristine", "noisy", "fft", "bg_sub", "top_hat", "unet"]
-    models = [Models.DeepMerge, Models.ResNet18, Models.HeavyCNN]
+    dataset_types = ["pristine", "noisy", "fft", "bg_sub", "top_hat", "unet"] 
+    models = [Models.FastHeavyCNN, Models.HeavyCNN, Models.DeepMerge, Models.ResNet18,]
     
     for model_class in models:
         for dataset_type in dataset_types:
             experiment_name = f"TEST_{model_class.__name__}_{dataset_type}"
-            print(f"Running experiment: {experiment_name}")
+            print(f"################### Running experiment: {experiment_name} ###################")
             # experiment_name = "test"
 
             # load dataset
-            # dataset_type = "unet" # change here to the preferred dataset: noisy, pristine, fft, bg_sub, top_hat, gmm, unet
+            dataset_type = "noisy" # change here to force the preferred dataset: noisy, pristine, fft, bg_sub, top_hat, gmm, unet
             X, y = GalaxyDataset.load_dataset(dataset_type=dataset_type)
 
             # split 70:10:20
@@ -46,33 +51,48 @@ if __name__ == "__main__":
                 ToTensorV2()
             ])
 
-            # create dataloaders
+            # create dataloaders, if it crashes here, try reducing the batch size, remove pin_memory, prefetch_factor, persistent_workers, or num_workers
             batch_size = 256
-            train_dl = GalaxyDataset.get_dataloader(X_train, y_train, batch_size=batch_size,num_workers=4, shuffle=True, transform=augmentations)
-            val_dl = GalaxyDataset.get_dataloader(X_val, y_val, batch_size=batch_size,num_workers=4, shuffle=False)
-            test_dl = GalaxyDataset.get_dataloader(X_test, y_test, batch_size=batch_size,num_workers=4, shuffle=False)
-            del X_train, X_val, X_test, y_train, y_val, y_test, X, y
+            train_dl = GalaxyDataset.get_dataloader(X_train, y_train, augmentations, batch_size=batch_size,num_workers=4, shuffle=True, pin_memory=True, drop_last=False, prefetch_factor=2, persistent_workers=True)
+            val_dl = GalaxyDataset.get_dataloader(X_val, y_val, None, batch_size=batch_size,num_workers=4, shuffle=False)
+            test_dl = GalaxyDataset.get_dataloader(X_test, y_test, None, batch_size=batch_size,num_workers=4, shuffle=False)
+            
+            # weight for BCELoss, to balance the classes
+            positive_samples = sum(y_train == 1)
+            negative_samples = sum(y_train == 0)
+            total_samples = positive_samples + negative_samples
+
+            weight = negative_samples / positive_samples
+            weight = torch.tensor([weight]).to(TrainTesting.device) 
+            del X_train, X_val, X_test, y_train, y_val, y_test, X, y # memory's precious
+            gc.collect()
 
             # create model
             model = model_class().to(TrainTesting.device) # change here to the preferred model: ResNet18, HeavyCNN or DeepMerge
-            criterion = nn.BCELoss()
+
+            criterion = nn.BCELoss(weight=weight)
             optimizer = optim.AdamW(model.parameters(), lr=1e-4, fused=True)
             scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-6)
 
             # train model
-            epochs = 100
-            train_loss, val_loss, train_acc, val_acc = TrainTesting.train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion)
+            epochs = 70
+            train_loss, val_loss, train_acc, val_acc, best_state_dict = TrainTesting.train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion, validate_every=5, weight=weight)
 
             # save results
-            Utils.save_results(model, experiment_name, train_loss, val_loss, train_acc, val_acc, optimizer, scheduler)
+            Utils.save_results(model, experiment_name, train_loss, val_loss, train_acc, val_acc, optimizer, scheduler, best_state_dict)
 
             # test model
-            test_acc, test_loss = TrainTesting.validate(model, test_dl)
+            test_acc, test_loss, _ = TrainTesting.validate(model, test_dl)
             print(f'Test Accuracy: {test_acc:.4f}, Test Loss: {test_loss:.4f}')
+
+            model.load_state_dict(best_state_dict) # load best model
+            best_test_acc, best_test_loss, inference_time = TrainTesting.validate(model, test_dl)
+            print(f'Best Test Accuracy: {best_test_acc:.4f}, Best Test Loss: {best_test_loss:.4f}, Inference Time: {inference_time:.6f} seconds')
 
             # pretty plots
             Utils.plots(model, experiment_name, test_dl, train_loss, val_loss, train_acc, val_acc)
 
+            # clear memory
             del model, criterion, optimizer, scheduler, train_loss, val_loss, train_acc, val_acc, test_acc, test_loss
             torch.cuda.empty_cache()
             gc.collect()

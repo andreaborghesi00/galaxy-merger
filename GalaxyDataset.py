@@ -37,9 +37,9 @@ class GalaxyDataset(Dataset):
             return self.transform(image=self.X[idx])['image'], self.y[idx]
         return self.X[idx], self.y[idx]
     
-def get_dataloader(X, y, batch_size=32, transform=None, shuffle=True, num_workers=4):
+def get_dataloader(X, y, transform, *args, **kwargs):
     dataset = GalaxyDataset(X, y, transform)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+    return DataLoader(dataset, *args, **kwargs)
 
 def generate_dataset(X, func, *args, **kwargs):
     """
