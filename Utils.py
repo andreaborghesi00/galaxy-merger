@@ -12,7 +12,7 @@ def plots(model, experiment_name, test_dl, train_loss, val_loss, train_acc, val_
     global res_dir
     os.makedirs(plot_dir, exist_ok=True)
 
-    i = 0 # i know it's ugly, leave me alone
+    i = -1 # i know it's ugly, leave me alone
     while os.path.exists(os.path.join(res_dir, f'history_{experiment_name}_{i}.pkl')): i += 1
 
     # loss and accuracy plots
@@ -53,7 +53,7 @@ def plots(model, experiment_name, test_dl, train_loss, val_loss, train_acc, val_
     plt.title('Confusion Matrix')
     plt.savefig(os.path.join(plot_dir, f'confusion_matrix_{experiment_name}_{i}.png'))
     plt.close('all')
-def save_results(model, experiment_name, train_loss, val_loss, train_acc, val_acc, optimizer, scheduler):
+def save_results(model, experiment_name, train_loss, val_loss, train_acc, val_acc, optimizer, scheduler, best_state_dict):
     os.makedirs(res_dir, exist_ok=True)
 
     history = {
@@ -67,7 +67,8 @@ def save_results(model, experiment_name, train_loss, val_loss, train_acc, val_ac
     while os.path.exists(os.path.join(res_dir, f'history_{experiment_name}_{i}.pkl')): i += 1
     
     torch.save({
-        'model_state_dict': model.state_dict(),
+        'last_model_state_dict': model.state_dict(),
+        'best_model_state_dict': best_state_dict,
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
         'model': model,
@@ -77,4 +78,4 @@ def save_results(model, experiment_name, train_loss, val_loss, train_acc, val_ac
         'scheduler': scheduler,
         'scheduler_name': scheduler.__class__.__name__,
         'history': history
-    }, os.path.join(res_dir, f'history_{experiment_name}_{i}.pkl'))
+    }, os.path.join(res_dir, f'history_{experiment_name}_{i}.pth'))
