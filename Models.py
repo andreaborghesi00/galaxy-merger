@@ -69,6 +69,41 @@ class HeavyCNN(Module):
         x = x.view(-1, 256*4*4)
         x = self.fc1(x)
         return x
+    
+class FastHeavyCNN(Module):
+    def __init__(self):
+        super(FastHeavyCNN, self).__init__()
+        self.features = Sequential(
+            self._make_layer(3, 32, 2),
+            self._make_layer(32, 64, 2),
+            self._make_layer(64, 128, 3),
+            self._make_layer(128, 256, 3)
+        )
+        self.fc = Sequential(
+            Linear(256*4*4, 1024),
+            ReLU(inplace=True),
+            Dropout(0.25),
+            Linear(1024, 512),
+            ReLU(inplace=True),
+            Dropout(0.25),
+            Linear(512, 1),
+            Sigmoid()
+        )
+
+    def _make_layer(self, in_channels, out_channels, num_blocks):
+        layers = []
+        for i in range(num_blocks):
+            layers.append(Conv2d(in_channels if i == 0 else out_channels, out_channels, kernel_size=3, padding='same'))
+            layers.append(BatchNorm2d(out_channels))
+            layers.append(ReLU(inplace=True))
+        layers.append(MaxPool2d(2))
+        return Sequential(*layers)
+
+    def forward(self, x):
+        x = self.features(x)
+        x = x.view(-1, 256*4*4)
+        x = self.fc(x)
+        return x
 
 class ClassifierHead(Module):
     def __init__(self, in_features):
