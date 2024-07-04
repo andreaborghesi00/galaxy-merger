@@ -44,10 +44,8 @@ def top_hat_transform(image, radius):
         top_hat[:,:,band] = white_tophat(image[:,:,band], disk(radius))
     return top_hat
 
-    # Apply the top-hat transform
-    top_hat_image = white_tophat(image, selem)
-
-    return top_hat_image
+def top_hat_transform_single_band(image, radius, band=0):
+    return white_tophat(image[:, :, band], disk(radius))
 
 def rolling_ball_background_subtraction_dataset(dataset, radius):
     """

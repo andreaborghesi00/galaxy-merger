@@ -340,6 +340,7 @@ def plot_transformed_samples(fun, seed=206265, x=X, y=y, num_samples=3, band_wis
 
     # select 16 random image indices:
     example_ids = np.random.choice(x.shape[0], num_samples)
+    print(example_ids)
     # pull the F814W image (index=0) from the simulated dataset for these selections
     examples = [x[j, :, :, :] for j in example_ids] # not really, we're pulling all bands
 
@@ -396,7 +397,7 @@ denoise_info('dataset_fft', fourierDenoise.denoise_dataset, verbose=True);
 
 # %%
 fig = plt.figure(figsize=(12, 12))
-sample = X[4399]
+sample = X[4369]
 for band in range(3):
     ax = fig.add_subplot(1, 3, band+1)
     img_fft = fftpack.fft2(sample[:,:,band])    # 2 dimensional fast fourier transform of a single band of the image
@@ -407,11 +408,11 @@ plt.show()
 
 # %%
 img_fft = fftpack.fft2(sample[:,:,0])
-keep_fraction = 0.38 # keep only 38% of the original frequencies. The lower the fraction, the more aggressive the filtering -> more noise removed but less detail
+frac = 0.35
 im_fft2 = img_fft.copy()
 r, c = im_fft2.shape
-im_fft2[int(r*keep_fraction):int(r*(1-keep_fraction))] = 0 # set the "inner" rows to zero
-im_fft2[:, int(c*keep_fraction):int(c*(1-keep_fraction))] = 0 # set the "inner" columns to zero
+im_fft2[int(r*frac):int(r*(1-frac))] = 0 # set the "inner" rows to zero
+im_fft2[:, int(c*frac):int(c*(1-frac))] = 0 # set the "inner" columns to zero
 plt.imshow(np.abs(im_fft2), norm=LogNorm(vmin=5), cmap='viridis')
 plt.colorbar()
 plt.title('Filtered Spectrum')
@@ -428,7 +429,7 @@ ax.title.set_text(f'Original Image: Entropy={orig_entropy:.2f}')
 ax.axis('off')
 ax = plt.subplot(1, 2, 2)
 ax.imshow(im_new, cmap='binary_r')
-ax.title.set_text(f'Filtered Image: Entropy={filtered_entropy:.2f} (~{filtered_entropy-orig_entropy:.2f})')
+ax.title.set_text(f'Denoised Image: Entropy={filtered_entropy:.2f} (~{filtered_entropy-orig_entropy:.2f})')
 ax.axis('off')
 plt.show()
 
@@ -448,8 +449,25 @@ plot_transformed_samples(fourierDenoise.denoise_sample, x=X, y=y, num_samples=3,
 plot_transformed_samples(morphologicalDenoise.rolling_ball_background_subtraction, x=X, y=y, num_samples=3, band_wise_transform=False, radius=5)
 
 # %%
+from scipy.ndimage import minimum_filter
+from skimage.morphology import disk
 
+sample = X[4369]
+im_new  = sample[:,:,band] - minimum_filter(sample[:,:,band], footprint=disk(5))
+orig_entropy = image_entropy(sample)
+filtered_entropy = image_entropy(im_new)
+plt.figure(figsize=(12, 12))
+ax = plt.subplot(1, 2, 1)
+ax.imshow(sample[:,:,2], cmap='binary_r')
+ax.title.set_text(f'Original Image: Entropy={orig_entropy:.2f}')
+ax.axis('off')
+ax = plt.subplot(1, 2, 2)
+ax.imshow(im_new, cmap='binary_r')
+ax.title.set_text(f'Denoised Image: Entropy={filtered_entropy:.2f} (~{filtered_entropy-orig_entropy:.2f})')
+ax.axis('off')
+plt.show()
 
+# %%
 denoise_info('dataset_bg_sub', morphologicalDenoise.rolling_ball_background_subtraction, radius=5);
 
 # %% [markdown]
@@ -458,6 +476,22 @@ denoise_info('dataset_bg_sub', morphologicalDenoise.rolling_ball_background_subt
 # %%
 plot_transformed_samples(morphologicalDenoise.top_hat_transform, x=X, y=y, num_samples=3, band_wise_transform=False, radius=5)
 
+
+# %%
+sample = X[4369]
+im_new = morphologicalDenoise.top_hat_transform_single_band(sample, 5, 0)# inverse fourier transform, reconstruct the image
+orig_entropy = image_entropy(sample)
+filtered_entropy = image_entropy(im_new)
+plt.figure(figsize=(12, 12))
+ax = plt.subplot(1, 2, 1)
+ax.imshow(sample[:,:,2], cmap='binary_r')
+ax.title.set_text(f'Original Image: Entropy={orig_entropy:.2f}')
+ax.axis('off')
+ax = plt.subplot(1, 2, 2)
+ax.imshow(im_new, cmap='binary_r')
+ax.title.set_text(f'Denoised Image: Entropy={filtered_entropy:.2f} (~{filtered_entropy-orig_entropy:.2f})')
+ax.axis('off')
+plt.show()
 
 # %%
 denoise_info('dataset_tophat', morphologicalDenoise.top_hat_transform_dataset, radius=5);
