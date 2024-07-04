@@ -1,6 +1,7 @@
 import numpy as np
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, concatenate
+import os
 
 # i know this uses a different framework (keras) instead of pytorch as for main.py, but i did it before i knew i could use pytorch for this task
 def model(input_shape):
@@ -54,7 +55,40 @@ def model(input_shape):
 
     return model
 
-def train(model, X_train, Y_train, X_val, Y_val, batch_size=32, epochs=10, save_path=None):
+def simpler_model(input_shape):
+    """
+    Creates a simpler U-Net denoising model.
+
+    Args:
+        input_shape (tuple): The shape of the input tensor.
+
+    Returns:
+        keras.models.Model: The U-Net denoising model.
+    """
+    inputs = Input(shape=input_shape)
+
+    # Encoder
+    conv1 = Conv2D(8, (3, 3), activation='relu', padding='same')(inputs)
+    conv1 = Conv2D(8, (3, 3), activation='relu', padding='same')(conv1)
+    pool1 = MaxPooling2D((2, 2))(conv1)
+
+    # Bottleneck
+    conv3 = Conv2D(16, (3, 3), activation='relu', padding='same')(pool1)
+    conv3 = Conv2D(16, (3, 3), activation='relu', padding='same')(conv3)
+
+    # Decoder
+    up5 = UpSampling2D((2, 2))(conv3)
+    up5 = concatenate([conv1, up5], axis=3)
+    conv5 = Conv2D(8, (3, 3), activation='relu', padding='same')(up5)
+    conv5 = Conv2D(8, (3, 3), activation='relu', padding='same')(conv5)
+
+    outputs = Conv2D(3, (1, 1), activation='linear')(conv5)
+
+    model = Model(inputs=inputs, outputs=outputs)
+
+    return model
+
+def train(model, X_train, Y_train, X_val, Y_val, batch_size=32, epochs=10, save_path=None, root_dir='unet_precomputed'):
     """
     Trains a U-Net model on the given training data.
 
@@ -71,10 +105,11 @@ def train(model, X_train, Y_train, X_val, Y_val, batch_size=32, epochs=10, save_
     Returns:
         tf.keras.Model: The trained U-Net model.
     """
-    model.compile(optimizer='adam', loss='mean_squared_error')
+    model.compile(optimizer='adam', loss='mse')
     model.fit(X_train, Y_train, batch_size=batch_size, epochs=epochs, validation_data=(X_val, Y_val))
     if save_path:
-        model.save(save_path)
+        path = os.path.join(root_dir, save_path)
+        model.save(path)
     return model
 
 def load_model(model_path, input_shape, optimizer='adam', loss='mse'):

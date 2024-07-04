@@ -13,7 +13,7 @@
 # ---
 
 # %% [markdown]
-# # Imports and initialization
+# # Imports and Initialization
 
 # %%
 # arrays and math
@@ -516,6 +516,20 @@ X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.3, r
 X_test, X_val, y_test, y_val = train_test_split(X_valtest, y_valtest, test_size=0.5, random_state=random_state)
 
 input_shape = X_train.shape[1:]
+
+# %%
+model = unetDenoise.simpler_model(input_shape)
+model.summary()
+
+# %%
+model = unetDenoise.train(model, X_train, X_train, X_val, X_val, batch_size=32, epochs=4, save_path='simple_unet_4epochs.h5')
+
+# %%
+X_test_unet = unetDenoise.predict(X_test, model)
+plot_orig_samples(seed=206261, x=X_test_unet, y=y_test, num_samples=3)
+
+# %%
+plot_orig_samples(seed=206261, x=X_test, y=y_test, num_samples=3)
 
 # %%
 model = unetDenoise.load_model('unet_precomputed/unet_model_4epochs.keras', input_shape)

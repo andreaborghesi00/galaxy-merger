@@ -34,7 +34,7 @@ if __name__ == "__main__":
             # experiment_name = "test"
 
             # load dataset
-            dataset_type = "noisy" # change here to force the preferred dataset: noisy, pristine, fft, bg_sub, top_hat, gmm, unet
+            dataset_type = "unet" # change here to force the preferred dataset: noisy, pristine, fft, bg_sub, top_hat, gmm, unet
             X, y = GalaxyDataset.load_dataset(dataset_type=dataset_type)
 
             # split 70:10:20
@@ -53,7 +53,7 @@ if __name__ == "__main__":
 
             # create dataloaders, if it crashes here, try reducing the batch size, remove pin_memory, prefetch_factor, persistent_workers, or num_workers
             batch_size = 256
-            train_dl = GalaxyDataset.get_dataloader(X_train, y_train, augmentations, batch_size=batch_size,num_workers=4, shuffle=True, pin_memory=True, drop_last=False, prefetch_factor=2, persistent_workers=True)
+            train_dl = GalaxyDataset.get_dataloader(X_train, y_train, augmentations, batch_size=batch_size,num_workers=4, shuffle=True, pin_memory=True, drop_last=False, prefetch_factor=1, persistent_workers=True)
             val_dl = GalaxyDataset.get_dataloader(X_val, y_val, None, batch_size=batch_size,num_workers=4, shuffle=False)
             test_dl = GalaxyDataset.get_dataloader(X_test, y_test, None, batch_size=batch_size,num_workers=4, shuffle=False)
             
