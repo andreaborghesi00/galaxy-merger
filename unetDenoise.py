@@ -122,7 +122,7 @@ def load_model(model_path, input_shape, optimizer='adam', loss='mse'):
     Returns:
         tf.keras.Model: The loaded U-Net model.
     """
-    unet_model = model(input_shape)
+    unet_model = simpler_model(input_shape)
     unet_model.compile(optimizer=optimizer, loss=loss)
     unet_model.load_weights(model_path)
     return unet_model
