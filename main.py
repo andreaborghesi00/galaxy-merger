@@ -25,7 +25,7 @@ from albumentations.pytorch import ToTensorV2
 
 if __name__ == "__main__":
     dataset_types = ["pristine", "noisy", "fft", "bg_sub", "top_hat", "unet"] 
-    models = [Models.FastHeavyCNN, Models.HeavyCNN, Models.DeepMerge, Models.ResNet18,]
+    models = [Models.FastHeavyCNN, Models.ResNet18, Models.DeepMerge]
     
     for model_class in models:
         for dataset_type in dataset_types:
@@ -61,6 +61,7 @@ if __name__ == "__main__":
             positive_samples = sum(y_train == 1)
             negative_samples = sum(y_train == 0)
             total_samples = positive_samples + negative_samples
+            print(f"Positive samples: {positive_samples}, Negative samples: {negative_samples}, Total samples: {total_samples}")
 
             weight = negative_samples / positive_samples
             weight = torch.tensor([weight]).to(TrainTesting.device) 
@@ -70,12 +71,12 @@ if __name__ == "__main__":
             # create model
             model = model_class().to(TrainTesting.device) # change here to the preferred model: ResNet18, HeavyCNN or DeepMerge
 
+            epochs = 70
             criterion = nn.BCELoss(weight=weight)
             optimizer = optim.AdamW(model.parameters(), lr=1e-4, fused=True)
-            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-6)
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
             # train model
-            epochs = 70
             train_loss, val_loss, train_acc, val_acc, best_state_dict = TrainTesting.train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion, validate_every=5, weight=weight)
 
             # save results
@@ -91,6 +92,7 @@ if __name__ == "__main__":
 
             # pretty plots
             Utils.plots(model, experiment_name, test_dl, train_loss, val_loss, train_acc, val_acc)
+            Utils.compute_roc_auc(model, test_dl, experiment_name)
 
             # clear memory
             del model, criterion, optimizer, scheduler, train_loss, val_loss, train_acc, val_acc, test_acc, test_loss
