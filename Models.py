@@ -1,5 +1,7 @@
-from torch.nn import Conv2d, MaxPool2d, BatchNorm2d, Dropout, ReLU, Sigmoid, GELU, Module, Sequential, Linear, Softmax
+import torch
+from torch.nn import Conv2d, MaxPool2d, BatchNorm2d, Dropout, ReLU, Sigmoid, GELU, Module, Sequential, Linear, Softmax, LeakyReLU
 from torchvision.models import resnet18, ResNet18_Weights
+from torchsummary import summary
 
 class HeavyCNN(Module):
     def __init__(self):
@@ -81,10 +83,10 @@ class FastHeavyCNN(Module):
         )
         self.fc = Sequential(
             Linear(256*4*4, 1024),
-            ReLU(inplace=True),
+            LeakyReLU(inplace=True),
             Dropout(0.25),
             Linear(1024, 512),
-            ReLU(inplace=True),
+            LeakyReLU(inplace=True),
             Dropout(0.25),
             Linear(512, 1),
             Sigmoid()
@@ -95,7 +97,7 @@ class FastHeavyCNN(Module):
         for i in range(num_blocks):
             layers.append(Conv2d(in_channels if i == 0 else out_channels, out_channels, kernel_size=3, padding='same'))
             layers.append(BatchNorm2d(out_channels))
-            layers.append(ReLU(inplace=True))
+            layers.append(LeakyReLU(inplace=True))
         layers.append(MaxPool2d(2))
         return Sequential(*layers)
 
@@ -184,3 +186,37 @@ class DeepMerge(Module):
         x = x.view(x.size(0), -1)  # Flatten the tensor
         x = self.fc1(x)
         return x
+    
+def load_model(model_class, model_path, last=False, verbose=False):
+    """
+    Load a trained model from a checkpoint file.
+
+    Args:
+        model_class (class): The class of the model to be loaded.
+        model_path (str): The path to the model checkpoint file.
+        last (bool, optional): Whether to load the last model state or the best model state. Defaults to False.
+        verbose (bool, optional): Whether to print information about the loaded model. Defaults to False.
+
+    Returns:
+        model: The loaded model.
+    """
+    model = model_class()
+
+    try:
+        model_checkpoint = torch.load(model_path)
+    except FileNotFoundError as e:
+        print(f"Model checkpoint not found at {model_path}")
+        raise e
+    
+    model.load_state_dict(model_checkpoint['model_state_dict' if last else 'best_model_state_dict'])
+    if verbose:
+        print(f"Loaded model: {model.__class__.__name__}")
+        print(f"Performance history: {model_checkpoint['history']}")
+    return model
+    
+if __name__ == "__main__":
+    model_classes = [HeavyCNN, FastHeavyCNN, ResNet18, DeepMerge]
+    for model_class in model_classes:
+        model = model_class()
+        print(f"Model: {model.__class__.__name__}")
+        summary(model, (3, 75, 75))
