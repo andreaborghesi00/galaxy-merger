@@ -5,13 +5,18 @@ import os
 import torch
 import TrainTesting
 import seaborn as sns
-from sklearn.metrics import roc_curve, auc
+from sklearn.metrics import roc_curve, auc, precision_recall_curve
+from sklearn.model_selection import train_test_split
+import Models
+import TrainTesting
+import GalaxyDataset
 
 RES_DIR = "results"
 PREFIX_MODELS = "history"
 PREFIX_PLOTS = "loss_acc"
 PREFIX_CONF = "confusion_matrix"
 PREFIX_ROC = "roc"
+PREFIX_PR = "pr"
 
 
 def plots(model, experiment_name, test_dl, train_loss, val_loss, train_acc, val_acc):
@@ -31,9 +36,10 @@ def plots(model, experiment_name, test_dl, train_loss, val_loss, train_acc, val_
     plot_dir = os.path.join(RES_DIR, "plots", model.__class__.__name__)
     conf_dir = os.path.join(RES_DIR, "confusion_matrices", model.__class__.__name__)
     os.makedirs(plot_dir, exist_ok=True)
+    os.makedirs(conf_dir, exist_ok=True)
 
     i = 0 # i know it's ugly, leave me alone
-    while os.path.exists(os.path.join(RES_DIR, f'{PREFIX_PLOTS}_{experiment_name}_{i}.pkl')): i += 1
+    while os.path.exists(os.path.join(plot_dir, f'{PREFIX_PLOTS}_{experiment_name}_{i}.png')): i += 1
 
     # loss and accuracy plots
     plt.figure(figsize=(12, 6))
@@ -112,7 +118,7 @@ def compute_roc_auc(model, test_dl, experiment_name, save_path=None):
     roc_auc = auc(fpr, tpr)
 
     i = 0 # i know it's ugly, leave me alone
-    while os.path.exists(os.path.join(RES_DIR, f'{PREFIX_ROC}_{experiment_name}_{i}.pkl')): i += 1
+    while os.path.exists(os.path.join(roc_dir, f'{PREFIX_ROC}_{experiment_name}_{i}.png')): i += 1
 
     plt.figure(figsize=(8, 6))
     plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
@@ -124,12 +130,49 @@ def compute_roc_auc(model, test_dl, experiment_name, save_path=None):
     if save_path:
         plt.savefig(save_path)
     plt.savefig(os.path.join(roc_dir, f'{PREFIX_ROC}_{experiment_name}_{i}.png'))
+    plt.close('all')
+    
     return roc_auc
 
-
-def combined_roc_auc(models, test_dl, experiment_names, save_path=None):
+def compute_precision_recall(model, test_dl, experiment_name, save_path=None):
     """
-    Calculate and plot the combined ROC curve and AUC for multiple models.
+    Compute the Precision-Recall curve for a given model.
+
+    Args:
+        model (object): The trained model.
+        test_dl (DataLoader): The DataLoader object containing the test data.
+        experiment_name (str): The name of the experiment.
+        save_path (str, optional): The path to save the Precision-Recall curve plot. Defaults to None.
+
+    Returns:
+        None
+    """
+    global RES_DIR, PREFIX_PR
+    pr_dir = os.path.join(RES_DIR, "precision_recall", model.__class__.__name__)
+    os.makedirs(pr_dir, exist_ok=True)
+
+    y_true, y_pred = _test_probas(model, test_dl)
+    precision, recall, thresholds = precision_recall_curve(y_true, y_pred)
+    pr_auc = auc(recall, precision)
+
+    i = 0 # i know it's ugly, leave me alone
+    while os.path.exists(os.path.join(pr_dir, f'{PREFIX_PR}_{experiment_name}_{i}.png')): i += 1
+
+    plt.figure(figsize=(8, 6))
+    plt.plot(recall, precision, color='darkorange', lw=2, label='Precision Recall curve (area = %0.2f)' % pr_auc)
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.legend(loc="lower right")
+    if save_path:
+        plt.savefig(save_path)
+    plt.savefig(os.path.join(pr_dir, f'{PREFIX_PR}_{experiment_name}_{i}.png'))
+    plt.close('all')
+
+def combined_precision_recall(model_classes, model_paths, test_dl, save_path=None):
+    """
+    Calculate and plot the combined Precision-Recall curve for multiple models.
 
     Parameters:
     - models (list): A list of trained models.
@@ -140,19 +183,93 @@ def combined_roc_auc(models, test_dl, experiment_names, save_path=None):
     Returns:
     None
     """
+    global RES_DIR, PREFIX_PR
+    pr_combined_dir = os.path.join(RES_DIR, "precision_recall", "combined")
+    os.makedirs(pr_combined_dir, exist_ok=True)
+
     plt.figure(figsize=(8, 6))
-    for model, experiment_name in zip(models, experiment_names):
+    for idx in range(len(model_classes)):
+        model = Models.load_model(model_classes[idx], model_paths[idx]).to(TrainTesting.device)
         y_true, y_pred = _test_probas(model, test_dl)
-        fpr, tpr, thresholds = roc_curve(y_true, y_pred)
-        roc_auc = auc(fpr, tpr)
-        plt.plot(fpr, tpr, lw=2, label=f'{experiment_name} (area = %0.2f)' % roc_auc)
+        precision, recall, thresholds = precision_recall_curve(y_true, y_pred)
+        pr_auc = auc(recall, precision)
+        plt.plot(recall, precision, lw=2, label=f'{model.__class__.__name__} (area = {pr_auc:.2f})', alpha=0.7)
+        torch.cuda.empty_cache()
     plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('ROC Curve')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
     plt.legend(loc="lower right")
     if save_path:
         plt.savefig(save_path)
+    else:
+        i = 0 # i know it's ugly, leave me alone
+        while os.path.exists(os.path.join(pr_combined_dir, f'{PREFIX_PR}_combined_{i}.png')): i += 1
+        plt.savefig(os.path.join(pr_combined_dir, f'{PREFIX_PR}_combined_{i}.png'))
+
+    plt.close('all')
+
+
+def combined_roc_auc_compare_models(model_classes, model_paths, test_dl, dataset_type, file_name=None):
+    global RES_DIR, PREFIX_ROC
+
+    roc_combined_dir = os.path.join(RES_DIR, "roc_auc", "combined")
+    os.makedirs(roc_combined_dir, exist_ok=True)
+
+    plt.figure(figsize=(8, 6))
+    for idx in range(len(model_classes)):
+        model = Models.load_model(model_classes[idx], model_paths[idx]).to(TrainTesting.device)
+        y_true, y_pred = _test_probas(model, test_dl)
+        fpr, tpr, thresholds = roc_curve(y_true, y_pred)
+        roc_auc = auc(fpr, tpr)
+        plt.plot(fpr, tpr, lw=2, label=f'{model.__class__.__name__} (area = {roc_auc:.2f})', alpha=0.7)
+        torch.cuda.empty_cache()
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title(f'ROC Curves for {dataset_type} dataset')
+    plt.legend(loc="lower right")
+    if file_name:
+        plt.savefig(os.path.join(roc_combined_dir, f"{file_name}.png"))
+    else:
+        i = 0 # i know it's ugly, leave me alone
+        while os.path.exists(os.path.join(roc_combined_dir, f'{PREFIX_ROC}_combined_{i}.png')): i += 1
+        plt.savefig(os.path.join(roc_combined_dir, f'{PREFIX_ROC}_combined_{i}.png'))
+    plt.close('all')
+
+
+def combined_roc_auc_compare_datasets(model_class, model_paths, dataset_types, file_name=None, split_seed=0):
+    global RES_DIR, PREFIX_ROC
+
+    roc_combined_dir = os.path.join(RES_DIR, "roc_auc", "combined")
+    os.makedirs(roc_combined_dir, exist_ok=True)
+
+    plt.figure(figsize=(8, 6))
+    for idx in range(len(dataset_types)):
+        model = Models.load_model(model_class, model_paths[idx]).to(TrainTesting.device) 
+        X, y = GalaxyDataset.load_dataset(dataset_type=dataset_types[idx])
+        X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.3, stratify=y, random_state=split_seed)
+        X_val, X_test, y_val, y_test = train_test_split(X_valtest, y_valtest, test_size=0.67, stratify=y_valtest, random_state=split_seed)
+        test_dl = GalaxyDataset.get_dataloader(X_test, y_test, None, batch_size=256, num_workers=4, shuffle=False)
+
+        y_true, y_pred = _test_probas(model, test_dl)
+        fpr, tpr, thresholds = roc_curve(y_true, y_pred)
+        roc_auc = auc(fpr, tpr)
+        plt.plot(fpr, tpr, lw=2, label=f'{dataset_types[idx]} (area = {roc_auc:.2f})', alpha=0.7)
+        torch.cuda.empty_cache()
+
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title(f'ROC Curves for {model_class.__name__}')
+    plt.legend(loc="lower right")
+    if file_name:
+        plt.savefig(os.path.join(roc_combined_dir, f"{file_name}.png"))
+    else:
+        i = 0 # i know it's ugly, leave me alone
+        while os.path.exists(os.path.join(roc_combined_dir, f'{PREFIX_ROC}_combined_{i}.png')): i += 1
+        plt.savefig(os.path.join(roc_combined_dir, f'{PREFIX_ROC}_combined_{i}.png'))
+    plt.close('all')
 
 
 def save_results(model, experiment_name, train_loss, val_loss, train_acc, val_acc, optimizer, scheduler, best_state_dict):
@@ -183,10 +300,9 @@ def save_results(model, experiment_name, train_loss, val_loss, train_acc, val_ac
         'train_acc': train_acc,
         'val_acc': val_acc
     }
+    i = 0 # i know it's ugly, leave me alone
+    while os.path.exists(os.path.join(model_dir, f'{PREFIX_MODELS}_{experiment_name}_{i}.pth')): i += 1
 
-    i = 0
-    while os.path.exists(os.path.join(model_dir, f'{PREFIX_MODELS}_{experiment_name}_{i}.pkl')): i += 1
-    
     torch.save({ # i know it seems overkill, but it takes a lot of time to train these models
         'last_model_state_dict': model.state_dict(),
         'best_model_state_dict': best_state_dict,
