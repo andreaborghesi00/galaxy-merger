@@ -2,7 +2,6 @@ import os
 import numpy as np
 import gc
 
-import gmmDenoise
 import morphologicalDenoise
 import fourierDenoise
 import unetDenoise
@@ -75,14 +74,14 @@ def load_dataset(dataset_type="noisy"):
                                 "bg_sub" -> Background subtracted dataset,
                                 "top_hat" -> Top-hat transformed dataset,
                                 "unet" -> U-Net transformed dataset.
-                                "gmm" -> GMM transformed dataset.
 
     Returns:
         tuple: A tuple containing the loaded dataset X and the corresponding labels y.
     """
     global datasets_root
     os.makedirs(datasets_root, exist_ok=True)
-    dataset_options = ["noisy", "fft", "bg_sub", "top_hat", "unet", "gmm", "pristine"]
+    
+    dataset_options = ["noisy", "fft", "bg_sub", "top_hat", "unet", "pristine"]
     if dataset_type not in dataset_options:
         raise ValueError(f"Invalid dataset type. Available options: {dataset_options}")
     else:
@@ -144,10 +143,4 @@ def load_dataset(dataset_type="noisy"):
                 
                 torch.cuda.empty_cache()
 
-                return X_unet, y     
-
-            elif dataset_type == "gmm":
-                X, y = load_dataset()
-                X_gmm = generate_dataset(X, gmmDenoise.background_subtraction_dataset, gmm_type='precomputed_full')
-                np.save(os.path.join(datasets_root, 'dataset_gmm.npy'), X_gmm)
-                return X_gmm, y
+                return X_unet, y

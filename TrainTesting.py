@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch
 from tqdm import tqdm
 import torchmetrics as tm
-import torch.optim as optim
 import time
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

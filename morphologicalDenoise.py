@@ -1,4 +1,4 @@
-from skimage.morphology import disk, binary_erosion, white_tophat
+from skimage.morphology import disk, white_tophat
 from scipy.ndimage import minimum_filter
 import numpy as np
 

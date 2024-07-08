@@ -1,7 +1,4 @@
-import os
-import numpy as np
 import gc
-from tqdm import tqdm
 
 import GalaxyDataset
 import TrainTesting
@@ -13,7 +10,6 @@ import torch.optim as optim
 import torch.nn as nn
 
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix
 
 import albumentations as albus
 from albumentations.pytorch import ToTensorV2
@@ -28,9 +24,6 @@ if __name__ == "__main__":
     seed = 42 # for reproducibility, change it to None if you want random results
     dataset_types = ["pristine", "noisy", "fft", "bg_sub", "top_hat", "unet"] 
     models = [Models.ResNet18, Models.FastHeavyCNN, Models.DeepMerge]
-
-    models_root = os.path.join(Utils.RES_DIR, "models")
-    run_no = 0 # run number
 
     for model_class in models:
         for dataset_type in dataset_types:
@@ -97,9 +90,11 @@ if __name__ == "__main__":
 
             # pretty plots
             Utils.plots(model, experiment_name, test_dl, train_loss, val_loss, train_acc, val_acc)
+            Utils.compute_confusion_matrix(model, test_dl, experiment_name, normalized=True)
             Utils.compute_roc_auc(model, test_dl, experiment_name)
             Utils.compute_precision_recall(model, test_dl, experiment_name)
-            # clear memory
+
+            # clear memory, c'è la crisi
             del model, criterion, optimizer, scheduler, train_loss, val_loss, train_acc, val_acc, test_acc, test_loss
             torch.cuda.empty_cache()
             gc.collect()
