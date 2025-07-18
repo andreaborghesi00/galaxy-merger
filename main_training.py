@@ -1,9 +1,13 @@
 import gc
 
-import GalaxyDataset
-import TrainTesting
-import Models
-import Utils
+import galaxy_dataset
+import train_testing
+from models.resnet18 import ResNet18
+from models.fast_heavy_cnn import FastHeavyCNN
+from models.heavy_cnn import HeavyCNN
+from models.deepmerge import DeepMerge
+
+import utils
 
 import torch
 import torch.optim as optim
@@ -23,7 +27,7 @@ from albumentations.pytorch import ToTensorV2
 if __name__ == "__main__":
     seed = 42 # for reproducibility, change it to None if you want random results
     dataset_types = ["pristine", "noisy", "fft", "bg_sub", "top_hat", "unet"] 
-    models = [Models.ResNet18, Models.FastHeavyCNN, Models.DeepMerge]
+    models = [ResNet18, FastHeavyCNN, DeepMerge]
 
     for model_class in models:
         for dataset_type in dataset_types:
@@ -33,7 +37,7 @@ if __name__ == "__main__":
 
             # load dataset
             # dataset_type = "unet" # change here to force the preferred dataset: noisy, pristine, fft, bg_sub, top_hat, gmm, unet
-            X, y = GalaxyDataset.load_dataset(dataset_type=dataset_type)
+            X, y = galaxy_dataset.load_dataset(dataset_type=dataset_type)
 
             # split 70:10:20
             random_state = 42
@@ -51,9 +55,9 @@ if __name__ == "__main__":
 
             # create dataloaders, if it crashes here, try reducing the batch size, remove pin_memory, prefetch_factor, persistent_workers, or num_workers
             batch_size = 256
-            train_dl = GalaxyDataset.get_dataloader(X_train, y_train, augmentations, batch_size=batch_size,num_workers=4, shuffle=True, pin_memory=True, drop_last=False, prefetch_factor=1, persistent_workers=True)
-            val_dl = GalaxyDataset.get_dataloader(X_val, y_val, None, batch_size=batch_size,num_workers=4, shuffle=False)
-            test_dl = GalaxyDataset.get_dataloader(X_test, y_test, None, batch_size=batch_size,num_workers=4, shuffle=False)
+            train_dl = galaxy_dataset.get_dataloader(X_train, y_train, augmentations, batch_size=batch_size,num_workers=4, shuffle=True, pin_memory=True, drop_last=False, prefetch_factor=1, persistent_workers=True)
+            val_dl = galaxy_dataset.get_dataloader(X_val, y_val, None, batch_size=batch_size,num_workers=4, shuffle=False)
+            test_dl = galaxy_dataset.get_dataloader(X_test, y_test, None, batch_size=batch_size,num_workers=4, shuffle=False)
             
             # weight for BCELoss, to balance the classes
             positive_samples = sum(y_train == 1)
@@ -62,12 +66,12 @@ if __name__ == "__main__":
             print(f"Positive samples: {positive_samples}, Negative samples: {negative_samples}, Total samples: {total_samples}")
 
             weight = negative_samples / positive_samples
-            weight = torch.tensor([weight]).to(TrainTesting.device) 
+            weight = torch.tensor([weight]).to(train_testing.device) 
             del X_train, X_val, X_test, y_train, y_val, y_test, X, y # memory's precious
             gc.collect()
 
             # create model
-            model = model_class().to(TrainTesting.device) # change here to the preferred model: ResNet18, HeavyCNN or DeepMerge
+            model = model_class().to(train_testing.device) # change here to the preferred model: ResNet18, HeavyCNN or DeepMerge
 
             epochs = 150
             criterion = nn.BCELoss(weight=weight)
@@ -75,24 +79,24 @@ if __name__ == "__main__":
             scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
             # train model
-            train_loss, val_loss, train_acc, val_acc, best_state_dict = TrainTesting.train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion, validate_every=1, weight=weight)
+            train_loss, val_loss, train_acc, val_acc, best_state_dict = train_testing.train(model, train_dl, val_dl, epochs, optimizer, scheduler, criterion, validate_every=1, weight=weight)
 
             # save results
-            Utils.save_results(model, experiment_name, train_loss, val_loss, train_acc, val_acc, optimizer, scheduler, best_state_dict)
+            utils.save_results(model, experiment_name, train_loss, val_loss, train_acc, val_acc, optimizer, scheduler, best_state_dict)
 
             # test model
-            test_acc, test_loss, _ = TrainTesting.validate(model, test_dl)
+            test_acc, test_loss, _ = train_testing.validate(model, test_dl)
             print(f'Test Accuracy: {test_acc:.4f}, Test Loss: {test_loss:.4f}')
 
             model.load_state_dict(best_state_dict) # load best model
-            best_test_acc, best_test_loss, inference_time = TrainTesting.validate(model, test_dl)
+            best_test_acc, best_test_loss, inference_time = train_testing.validate(model, test_dl)
             print(f'Best Test Accuracy: {best_test_acc:.4f}, Best Test Loss: {best_test_loss:.4f}, Inference Time: {inference_time:.6f} seconds')
 
             # pretty plots
-            Utils.plots(model, experiment_name, test_dl, train_loss, val_loss, train_acc, val_acc)
-            Utils.compute_confusion_matrix(model, test_dl, experiment_name, normalized=True)
-            Utils.compute_roc_auc(model, test_dl, experiment_name)
-            Utils.compute_precision_recall(model, test_dl, experiment_name)
+            utils.plots(model, experiment_name, test_dl, train_loss, val_loss, train_acc, val_acc)
+            utils.compute_confusion_matrix(model, test_dl, experiment_name, normalized=True)
+            utils.compute_roc_auc(model, test_dl, experiment_name)
+            utils.compute_precision_recall(model, test_dl, experiment_name)
 
             # clear memory, c'è la crisi
             del model, criterion, optimizer, scheduler, train_loss, val_loss, train_acc, val_acc, test_acc, test_loss

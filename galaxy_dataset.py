@@ -2,9 +2,9 @@ import os
 import numpy as np
 import gc
 
-import morphologicalDenoise
-import fourierDenoise
-import unetDenoise
+import denoise.morphological_denoise as morphological_denoise
+import denoise.fourier_denoise
+import denoise.unet_denoise as unet_denoise
 
 from astropy.io import fits
 from astropy.utils.data import download_file
@@ -123,13 +123,13 @@ def load_dataset(dataset_type="noisy"):
 
             elif dataset_type == "bg_sub":
                 X, y = load_dataset()
-                X_bg_sub = generate_dataset(X, morphologicalDenoise.rolling_ball_background_subtraction_dataset, radius=5)
+                X_bg_sub = generate_dataset(X, morphological_denoise.rolling_ball_background_subtraction_dataset, radius=5)
                 np.save(os.path.join(datasets_root, 'dataset_bg_sub.npy'), X_bg_sub)
                 return X_bg_sub, y       
 
             elif dataset_type == "top_hat":
                 X, y = load_dataset()
-                X_top_hat = generate_dataset(X, morphologicalDenoise.top_hat_transform_dataset, radius=5)
+                X_top_hat = generate_dataset(X, morphological_denoise.top_hat_transform_dataset, radius=5)
                 np.save(os.path.join(datasets_root, 'dataset_top_hat.npy'), X_top_hat)
                 return X_top_hat, y
 
@@ -137,8 +137,8 @@ def load_dataset(dataset_type="noisy"):
                 X, y = load_dataset()
                 X = X[:, :72, :72, :]
                 input_shape = (72, 72, 3)
-                model = unetDenoise.load_model('unet_precomputed/unet_model_4epochs.keras', input_shape)
-                X_unet = generate_dataset(X, unetDenoise.predict, model=model)
+                model = unet_denoise.load_model('unet_precomputed/unet_model_4epochs.keras', input_shape)
+                X_unet = generate_dataset(X, unet_denoise.predict, model=model)
                 np.save(os.path.join(datasets_root, 'dataset_unet.npy'), X_unet)
                 
                 torch.cuda.empty_cache()

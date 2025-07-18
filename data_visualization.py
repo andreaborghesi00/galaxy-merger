@@ -46,7 +46,7 @@ from keras.layers import Conv2D, MaxPooling2D, UpSampling2D, concatenate, Input,
 from keras.callbacks import EarlyStopping
 from keras.callbacks import Callback, ModelCheckpoint
 from keras.optimizers import Adam
-from AugmentationCallback import AugmentationCallback
+from augmentation_callback import AugmentationCallback
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.applications import EfficientNetB0
 from tensorflow.keras import models
@@ -69,10 +69,10 @@ from sklearn import metrics
 import tensorflow as tf
 
 # denoise
-import gmmDenoise
-import morphologicalDenoise
-import fourierDenoise
-import unetDenoise
+import denoise.gmm_denoise as gmmDenoise
+import denoise.morphological_denoise as morphological_denoise
+import denoise.fourier_denoise as fourierDenoise
+import denoise.unet_denoise as unet_denoise
 
 
 # load data
@@ -446,7 +446,7 @@ plot_transformed_samples(fourierDenoise.denoise_sample, x=X, y=y, num_samples=3,
 # #### Rollling ball background subtraction
 
 # %%
-plot_transformed_samples(morphologicalDenoise.rolling_ball_background_subtraction, x=X, y=y, num_samples=3, band_wise_transform=False, radius=5)
+plot_transformed_samples(morphological_denoise.rolling_ball_background_subtraction, x=X, y=y, num_samples=3, band_wise_transform=False, radius=5)
 
 # %%
 from scipy.ndimage import minimum_filter
@@ -468,18 +468,18 @@ ax.axis('off')
 plt.show()
 
 # %%
-denoise_info('dataset_bg_sub', morphologicalDenoise.rolling_ball_background_subtraction, radius=5);
+denoise_info('dataset_bg_sub', morphological_denoise.rolling_ball_background_subtraction, radius=5);
 
 # %% [markdown]
 # #### Rolling ball top hat
 
 # %%
-plot_transformed_samples(morphologicalDenoise.top_hat_transform, x=X, y=y, num_samples=3, band_wise_transform=False, radius=5)
+plot_transformed_samples(morphological_denoise.top_hat_transform, x=X, y=y, num_samples=3, band_wise_transform=False, radius=5)
 
 
 # %%
 sample = X[4369]
-im_new = morphologicalDenoise.top_hat_transform_single_band(sample, 5, 0)# inverse fourier transform, reconstruct the image
+im_new = morphological_denoise.top_hat_transform_single_band(sample, 5, 0)# inverse fourier transform, reconstruct the image
 orig_entropy = image_entropy(sample)
 filtered_entropy = image_entropy(im_new)
 plt.figure(figsize=(12, 12))
@@ -494,7 +494,7 @@ ax.axis('off')
 plt.show()
 
 # %%
-denoise_info('dataset_tophat', morphologicalDenoise.top_hat_transform_dataset, radius=5);
+denoise_info('dataset_tophat', morphological_denoise.top_hat_transform_dataset, radius=5);
 
 # %% [markdown]
 # ### Mixture of models
@@ -518,24 +518,24 @@ X_test, X_val, y_test, y_val = train_test_split(X_valtest, y_valtest, test_size=
 input_shape = X_train.shape[1:]
 
 # %%
-model = unetDenoise.simpler_model(input_shape)
+model = unet_denoise.simpler_model(input_shape)
 model.summary()
 
 # %%
-model = unetDenoise.train(model, X_train, X_train, X_val, X_val, batch_size=32, epochs=4, save_path='simple_unet_4epochs.h5')
+model = unet_denoise.train(model, X_train, X_train, X_val, X_val, batch_size=32, epochs=4, save_path='simple_unet_4epochs.h5')
 
 # %%
-X_test_unet = unetDenoise.predict(X_test, model)
+X_test_unet = unet_denoise.predict(X_test, model)
 plot_orig_samples(seed=206261, x=X_test_unet, y=y_test, num_samples=3)
 
 # %%
 plot_orig_samples(seed=206261, x=X_test, y=y_test, num_samples=3)
 
 # %%
-model = unetDenoise.load_model('unet_precomputed/unet_model_4epochs.keras', input_shape)
+model = unet_denoise.load_model('unet_precomputed/unet_model_4epochs.keras', input_shape)
 
 # %%
-denoise_info('dataset_unet', unetDenoise.predict, model=model, verbose=True);
+denoise_info('dataset_unet', unet_denoise.predict, model=model, verbose=True);
 
 # %%
 X_unet = np.load('datasets/dataset_unet.npy')

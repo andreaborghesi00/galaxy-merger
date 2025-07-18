@@ -3,13 +3,12 @@ from sklearn.metrics import confusion_matrix
 import numpy as np
 import os
 import torch
-import TrainTesting
+import train_testing
 import seaborn as sns
 from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score
 from sklearn.model_selection import train_test_split
-import Models
-import TrainTesting
-import GalaxyDataset
+import train_testing
+import galaxy_dataset
 
 RES_DIR = "results"
 PREFIX_MODELS = "history"
@@ -18,6 +17,33 @@ PREFIX_CM = "confusion_matrix"
 PREFIX_ROC = "roc"
 PREFIX_PR = "pr"
 
+def load_model(model_class, model_path, last=False, verbose=False):
+    """
+    Load a trained model from a checkpoint file.
+
+    Args:
+        model_class (class): The class of the model to be loaded.
+        model_path (str): The path to the model checkpoint file.
+        last (bool, optional): Whether to load the last model state or the best model state. Defaults to False.
+        verbose (bool, optional): Whether to print information about the loaded model. Defaults to False.
+
+    Returns:
+        model: The loaded model.
+    """
+    model = model_class()
+
+    try:
+        model_checkpoint = torch.load(model_path)
+    except FileNotFoundError as e:
+        print(f"Model checkpoint not found at {model_path}")
+        raise e
+    
+    model.load_state_dict(model_checkpoint['model_state_dict' if last else 'best_model_state_dict'])
+    if verbose:
+        print(f"Loaded model: {model.__class__.__name__}")
+        print(f"Performance history: {model_checkpoint['history']}")
+    return model
+    
 
 def plots(model, experiment_name, test_dl, train_loss, val_loss, train_acc, val_acc):
     """
@@ -94,8 +120,8 @@ def _test_probas(model, test_dl):
     model.eval()
     with torch.no_grad():
         for x, y in test_dl:
-            x = x.to(TrainTesting.device)
-            y = y.to(TrainTesting.device)
+            x = x.to(train_testing.device)
+            y = y.to(train_testing.device)
             out = model(x)
             y_true.extend(y.cpu().numpy())
             y_pred.extend(out.cpu().numpy())
@@ -189,7 +215,7 @@ def combined_roc_auc_compare_models(model_classes, model_paths, test_dl, dataset
 
     plt.figure(figsize=(8, 6))
     for idx in range(len(model_classes)):
-        model = Models.load_model(model_classes[idx], model_paths[idx]).to(TrainTesting.device)
+        model = load_model(model_classes[idx], model_paths[idx]).to(train_testing.device)
         y_true, y_pred = _test_probas(model, test_dl)
         fpr, tpr, thresholds = roc_curve(y_true, y_pred)
         roc_auc = auc(fpr, tpr)
@@ -217,11 +243,11 @@ def combined_roc_auc_compare_datasets(model_class, model_paths, dataset_types, f
 
     plt.figure(figsize=(8, 6))
     for idx in range(len(dataset_types)):
-        model = Models.load_model(model_class, model_paths[idx]).to(TrainTesting.device) 
-        X, y = GalaxyDataset.load_dataset(dataset_type=dataset_types[idx])
+        model = load_model(model_class, model_paths[idx]).to(train_testing.device) 
+        X, y = galaxy_dataset.load_dataset(dataset_type=dataset_types[idx])
         X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.3, stratify=y, random_state=split_seed)
         X_val, X_test, y_val, y_test = train_test_split(X_valtest, y_valtest, test_size=0.67, stratify=y_valtest, random_state=split_seed)
-        test_dl = GalaxyDataset.get_dataloader(X_test, y_test, None, batch_size=256, num_workers=4, shuffle=False)
+        test_dl = galaxy_dataset.get_dataloader(X_test, y_test, None, batch_size=256, num_workers=4, shuffle=False)
 
         y_true, y_pred = _test_probas(model, test_dl)
         fpr, tpr, thresholds = roc_curve(y_true, y_pred)
@@ -250,7 +276,7 @@ def combined_pr_auc_compare_models(model_classes, model_paths, test_dl, dataset_
 
     plt.figure(figsize=(8, 6))
     for idx in range(len(model_classes)):
-        model = Models.load_model(model_classes[idx], model_paths[idx]).to(TrainTesting.device)
+        model = load_model(model_classes[idx], model_paths[idx]).to(train_testing.device)
         y_true, y_pred = _test_probas(model, test_dl)
         precision, recall, thresholds = precision_recall_curve(y_true, y_pred)
         pr_auc = average_precision_score(y_true, y_pred)
@@ -276,11 +302,11 @@ def combined_pr_auc_compare_datasets(model_class, model_paths, dataset_types, fi
 
     plt.figure(figsize=(8, 6))
     for idx in range(len(dataset_types)):
-        model = Models.load_model(model_class, model_paths[idx]).to(TrainTesting.device) 
-        X, y = GalaxyDataset.load_dataset(dataset_type=dataset_types[idx])
+        model = load_model(model_class, model_paths[idx]).to(train_testing.device) 
+        X, y = galaxy_dataset.load_dataset(dataset_type=dataset_types[idx])
         X_train, X_valtest, y_train, y_valtest = train_test_split(X, y, test_size=0.3, stratify=y, random_state=split_seed)
         X_val, X_test, y_val, y_test = train_test_split(X_valtest, y_valtest, test_size=0.67, stratify=y_valtest, random_state=split_seed)
-        test_dl = GalaxyDataset.get_dataloader(X_test, y_test, None, batch_size=256, num_workers=4, shuffle=False)
+        test_dl = galaxy_dataset.get_dataloader(X_test, y_test, None, batch_size=256, num_workers=4, shuffle=False)
 
         y_true, y_pred = _test_probas(model, test_dl)
         precision, recall, thresholds = precision_recall_curve(y_true, y_pred)
